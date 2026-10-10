@@ -1,0 +1,60 @@
+# Downloads, build trees and generated SRPMs
+/.cache/
+/build/
+/out/
+*.src.rpm
+*.rpm
+*.tar
+*.tar.gz
+*.tar.xz
+*.tar.zst
+*.tar.bz2
+*.tgz
+vendor/
+
+# Kernel module build output
+*.o
+*.ko
+*.ko.xz
+*.cmd
+*.mod
+*.mod.c
+*.dtbo
+*_dtbo.h
+modules.order
+Module.symvers
+.module-common.o
+.tmp_versions/
+
+# Apple firmware and OS images: never commit these
+*.ipsw
+*.im4p
+*.img4
+*.bin
+/firmware/
+**/apple/ave*.bin
+**/apple/avd*.bin
+
+# Keys, certificates, tokens and signing material
+*.pem
+*.key
+*.x509
+*.priv
+*.gpg
+*.asc
+*.p12
+*.pfx
+*.der
+*.crt
+*.cer
+copr-config
+copr.conf
+*.token
+.env
+.env.*
+
+# Editors
+*~
+*.swp
+.vscode/
+.idea/
