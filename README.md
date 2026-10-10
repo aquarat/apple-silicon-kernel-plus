@@ -17,7 +17,7 @@ Linux or Fedora; report them here.
 | `dkms-apple-avd` | The Asahi AVD video decoder driver with four fixes for long-running streams, built by DKMS. [packages/apple-avd](packages/apple-avd) | stable |
 | `apple-ave`, `dkms-apple-ave` | A V4L2 H.264/HEVC encoder driver for the AVE block, reverse engineered. No firmware included. [packages/apple-ave](packages/apple-ave) | **experimental** |
 | `mesa-honeykrisp-plus` | Mesa's Asahi Vulkan driver (Honeykrisp) with two shader compiler fixes, installed beside the system Mesa and used only through `VK_DRIVER_FILES`. Patch 0002 is still being validated. [packages/mesa-honeykrisp-plus](packages/mesa-honeykrisp-plus) | stable (0002: in validation) |
-| `qemu-vmapple`, `qemu-vmapple-kvm-nisv` | QEMU with the `vmapple` machine and the Reims paravirtual GPU, installed beside Fedora's qemu; and an opt-in package that turns on the kernel's no-syndrome MMIO emulation. [packages/qemu-vmapple](packages/qemu-vmapple) | stable |
+| `qemu-vmapple`, `qemu-vmapple-kvm-nisv` | QEMU with the `vmapple` machine and the Reims paravirtual GPU, installed beside Fedora's qemu; and an opt-in package that turns on the kernel's no-syndrome MMIO emulation. [packages/qemu-vmapple](packages/qemu-vmapple) | stable; **build it yourself**, not in the COPR (licence, see [LICENSING.md](LICENSING.md#qemu-vmapple)) |
 
 ## Supported hardware
 
@@ -39,7 +39,7 @@ yet; this line is a placeholder until it does).
 ```sh
 sudo dnf copr enable aquarat/apple-silicon-kernel-plus
 sudo dnf upgrade                      # moves you to this project's kernel (see below)
-sudo dnf install dkms-apple-avd       # and/or: apple-ave, mesa-honeykrisp-plus, qemu-vmapple
+sudo dnf install dkms-apple-avd       # and/or: apple-ave, mesa-honeykrisp-plus
 ```
 
 DKMS packages need `kernel-16k-devel` for each installed kernel.
@@ -110,7 +110,7 @@ KVM is built into the kernel, so `/etc/modprobe.d` options do not apply.
 Turn it on in one of these ways:
 
 ```sh
-sudo dnf install qemu-vmapple-kvm-nisv             # tmpfiles.d rule: on at every boot
+sudo dnf install qemu-vmapple-kvm-nisv             # if you built qemu-vmapple: tmpfiles.d rule, on at every boot
 # or, kernel command line:
 sudo grubby --update-kernel=ALL --args=kvm.emulate_nisv_ldst=1
 # or, until the next reboot:

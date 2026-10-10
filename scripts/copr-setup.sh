@@ -25,8 +25,10 @@ declare -A SPEC=(
     [apple-avd]=packages/apple-avd/apple-avd.spec
     [apple-ave]=packages/apple-ave/apple-ave.spec
     [mesa-honeykrisp-plus]=packages/mesa-honeykrisp-plus/mesa-honeykrisp-plus.spec
-    [qemu-vmapple]=packages/qemu-vmapple/qemu-vmapple.spec
 )
+# qemu-vmapple is not built on COPR yet: QEMU (GPL-2.0-only) links Reims and
+# metal2vulkan, whose LICENSE files say LGPL-3.0. Build it locally until Reims
+# runs as a separate process (see LICENSING.md).
 
 # Build timeouts in seconds (COPR's default is 5 hours).
 declare -A TIMEOUT=([kernel]=72000 [qemu-vmapple]=36000 [mesa-honeykrisp-plus]=18000

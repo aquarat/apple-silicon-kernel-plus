@@ -80,3 +80,10 @@ The Reims statements disagree with each other. QEMU's `LICENSE` says the
 emulator as a whole is GPL version 2, and the Reims and metal2vulkan code is
 linked into the same binary. These are the upstream projects' statements, reported as
 found; resolving them is for those projects.
+
+Until this is settled, this project does not distribute `qemu-vmapple`
+binaries: the COPR does not build it. Build it locally from the source
+package (`scripts/build-srpms.sh`, then `rpmbuild --rebuild`); a build for
+your own machines is not a distribution. The planned fix is to run Reims
+as a separate process that QEMU talks to over shared memory, so that the two
+are no longer one binary.

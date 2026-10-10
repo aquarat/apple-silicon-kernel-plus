@@ -15,7 +15,6 @@ on:
           - apple-avd
           - apple-ave
           - mesa-honeykrisp-plus
-          - qemu-vmapple
           - all
 
 permissions:
@@ -42,7 +41,7 @@ jobs:
           PACKAGE: ${{ inputs.package }}
         run: |
           if [ "$PACKAGE" = all ]; then
-            set -- apple-avd apple-ave mesa-honeykrisp-plus qemu-vmapple kernel
+            set -- apple-avd apple-ave mesa-honeykrisp-plus kernel
           else
             set -- "$PACKAGE"
           fi
