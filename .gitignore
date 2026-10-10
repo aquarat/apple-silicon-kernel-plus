@@ -58,3 +58,6 @@ copr.conf
 *.swp
 .vscode/
 .idea/
+
+# Python bytecode
+__pycache__/

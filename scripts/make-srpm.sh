@@ -115,7 +115,7 @@ build_kernel() {
 
     nvr=$(rpmspec -q --srpm --qf '%{version}-%{release}' "$spec" 2>/dev/null)
     date=$(LC_ALL=C date -u -d "@$SOURCE_DATE_EPOCH" '+%a %b %d %Y')
-    awk -v hdr="* $date $CHANGELOG_IDENTITY - ${nvr%.fc*}" -v pl="$(find "$HERE/packages/kernel/patches" -name '*.patch' -printf -- '- %f\n' | sort)" '
+    awk -v hdr="* $date $CHANGELOG_IDENTITY - ${nvr%.fc*}" -v pl="$(find "$HERE/packages/kernel/patches" -name '*.patch' -printf '%f\n' | sort | sed 's/^/- /')" '
         { print }
         /^%changelog$/ && !done { print hdr; print "- apple-silicon-kernel-plus rebuild of the @asahi kernel, 16k variant only, with:"; print pl; print ""; done=1 }
     ' "$spec" > "$spec.new" && mv "$spec.new" "$spec"

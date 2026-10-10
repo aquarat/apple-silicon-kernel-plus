@@ -37,7 +37,8 @@ for p in "${pkgs[@]}"; do
         ${KERNEL_NVR:+-e KERNEL_NVR="$KERNEL_NVR"} ${PREP_CHECK:+-e PREP_CHECK="$PREP_CHECK"} \
         ${KERNEL_SRPM:+-e KERNEL_SRPM="$KERNEL_SRPM"} \
         -v "$HERE:/src" -w /src "$IMAGE" scripts/make-srpm.sh "$p" "$rel"; then
-        if [ "${LINT:-0}" = 1 ]; then
+        # The kernel spec is @asahi's; it is not linted here.
+        if [ "${LINT:-0}" = 1 ] && [ "$p" != kernel ]; then
             "$tool" run --rm -u "$(id -u):$(id -g)" -v "$HERE:/src" -w /src "$IMAGE" \
                 sh -c "rpmlint -c packages/rpmlint.toml $rel/$p-[0-9]*.src.rpm || :"
         fi
