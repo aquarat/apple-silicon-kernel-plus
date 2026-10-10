@@ -209,7 +209,7 @@ build_qemu() {
     rm -rf "$w/vendor/qemu"
     mkdir -p "$w/vendor/qemu"
     git -C "$git_dir/vendor/qemu" archive HEAD | tar -x -C "$w/vendor/qemu"
-    (cd "$w/vendor/qemu" && meson subprojects download keycodemapdb berkeley-softfloat-3 berkeley-testfloat-3 >/dev/null) ||
+    (cd "$w/vendor/qemu" && meson subprojects download keycodemapdb berkeley-softfloat-3 berkeley-testfloat-3 >/dev/null 2>&1) ||
         die "meson subprojects download failed"
     find "$w/vendor/qemu/subprojects" -mindepth 2 -maxdepth 2 -name .git -exec rm -rf {} +
     rm -rf "$w/vendor/qemu/subprojects/packagecache"
@@ -221,7 +221,7 @@ build_qemu() {
     log "cargo vendor"
     mkdir -p "$top/stage/cargo-vendor"
     (cd "$w" && CARGO_HOME="$CACHE_DIR/cargo-home" cargo vendor --locked --versioned-dirs \
-        "$top/stage/cargo-vendor/vendor" > "$top/stage/cargo-vendor/config.toml") ||
+        "$top/stage/cargo-vendor/vendor" > "$top/stage/cargo-vendor/config.toml" 2>"$top/vendor.log") ||
         die "cargo vendor failed"
     sed -i "s|directory = \".*\"|directory = \"@VENDOR@\"|" "$top/stage/cargo-vendor/config.toml"
     "${TAR[@]}" -C "$top/stage" -cf - cargo-vendor | xz -T0 -6 > "$top/SOURCES/reims-vgpu-$short-vendor.tar.xz"
