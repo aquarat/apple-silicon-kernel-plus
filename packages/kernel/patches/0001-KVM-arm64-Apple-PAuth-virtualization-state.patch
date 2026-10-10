@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: aquarat <3090997+aquarat@users.noreply.github.com>
+From: Anees Iqbal <hello@aneesiqbal.ai>
 Date: Sat, 10 Oct 2026 12:00:00 +0000
 Subject: [PATCH 1/2] KVM: arm64: save, restore and expose Apple PAuth
  virtualization state
@@ -21,9 +21,9 @@ This is a rebase of Anees Iqbal's Linux 6.19 patch onto the Fedora Asahi
 7.1 kernel. The code changes are his; the rebase only moved context.
 
 Origin: https://github.com/steelbrain/experiment-macOS-arm64-on-asahi-linux-arm64 (commit 657bb24, patches/linux-6.19-vmapple-pac-vmkey.patch)
-Originally-by: Anees Iqbal <hello@aneesiqbal.ai>
 Tested: kernel-7.1.13-401.asahi on t6001 (M1 Max), macOS 13 and 26 guests
-Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
+[aquarat: rebased to Linux 7.1.13; no sign-off from the original author,
+ whose repository carries no licence. See LICENSING.md.]
 ---
  arch/arm64/include/asm/kvm_host.h          |  5 +++
  arch/arm64/kvm/hyp/include/hyp/sysreg-sr.h | 41 ++++++++++++++++++++++

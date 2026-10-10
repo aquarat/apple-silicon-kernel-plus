@@ -57,8 +57,8 @@ git format-patch --zero-commit --no-signature -o packages/kernel/patches <base>.
 PREP_CHECK=1 scripts/build-srpms.sh kernel
 ```
 
-Keep the headers: `Originally-by:`, `Origin:` and `Signed-off-by:` on 0001,
-`Signed-off-by:` on 0002. Check that `emulate_nisv_ldst` still defaults to
+Keep the headers: `From: Anees Iqbal`, `Origin:` and the rebase note on
+0001 (no sign-off unless he gives one), `Signed-off-by:` on 0002. Check that `emulate_nisv_ldst` still defaults to
 off.
 
 `BUILDID` in `packages/kernel/kernel-plus.conf`: keep `plus1` for a new

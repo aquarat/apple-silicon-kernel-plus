@@ -13,8 +13,8 @@ This project packages and patches other people's work.
   that first ran macOS guests under KVM on Asahi Linux, including the Linux
   6.19 patch for Apple's PAuth virtualization state. Kernel patch 0001 is a
   rebase of that patch onto the Fedora Asahi 7.1 kernel; the code changes
-  are his. The patch header carries `Originally-by: Anees Iqbal` and its
-  origin.
+  are his. The patch names him as its author (`From:`) and
+  names its origin.
 - Kernel patch 0002 (no-syndrome MMIO emulation) is this project's work.
 
 ## apple-avd

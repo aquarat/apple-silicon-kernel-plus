@@ -29,7 +29,8 @@ Linux 6.19 patch by Anees Iqbal, published in
 (commit `657bb24`, `patches/linux-6.19-vmapple-pac-vmkey.patch`). That
 repository has no licence file. A change to Linux can only be distributed
 under `GPL-2.0-only`, which is the licence it is offered under here. The
-patch header credits him (`Originally-by:`) and names its origin. If he
+patch names him as its author (`From:`) and names its origin; it carries
+no sign-off, as he has not given one. If he
 objects to its distribution, the patch will be withdrawn.
 
 `0002-KVM-arm64-emulate-MMIO-ldst-without-ISV.patch` is this project's work.
