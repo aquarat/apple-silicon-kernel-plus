@@ -15,7 +15,7 @@ Linux or Fedora; report them here.
 |---|---|---|
 | `kernel` (`kernel-16k-*`) | The `@asahi/kernel` COPR's kernel, 16k variant, rebuilt with two KVM patches: Apple PAuth VM-key context (on), and emulation of MMIO loads/stores without a syndrome (**off by default**). [packages/kernel](packages/kernel) | stable |
 | `dkms-apple-avd` | The Asahi AVD video decoder driver with four fixes for long-running streams, built by DKMS. [packages/apple-avd](packages/apple-avd) | stable |
-| `apple-ave`, `dkms-apple-ave` | A V4L2 H.264/HEVC encoder driver for the AVE block, reverse engineered. No firmware included. [packages/apple-ave](packages/apple-ave) | **experimental** |
+| `apple-ave`, `dkms-apple-ave` | A V4L2 H.264/HEVC encoder driver for the AVE block, reverse engineered, and `apple-ave-fetch-firmware`, which makes its firmware files on your Mac from Apple's own image. No Apple firmware or Apple data included. [packages/apple-ave](packages/apple-ave) | **experimental** ([why](packages/apple-ave/README.md#status)) |
 | `mesa-honeykrisp-plus` | Mesa's Asahi Vulkan driver (Honeykrisp) with two shader compiler fixes, installed beside the system Mesa and used only through `VK_DRIVER_FILES`. Patch 0002 is still being validated. [packages/mesa-honeykrisp-plus](packages/mesa-honeykrisp-plus) | stable (0002: in validation) |
 | `qemu-vmapple`, `qemu-vmapple-kvm-nisv` | QEMU with the `vmapple` machine and the Reims paravirtual GPU, installed beside Fedora's qemu; and an opt-in package that turns on the kernel's no-syndrome MMIO emulation. [packages/qemu-vmapple](packages/qemu-vmapple) | stable; **build it yourself**, not in the COPR (licence, see [LICENSING.md](LICENSING.md#qemu-vmapple)) |
 
@@ -27,7 +27,7 @@ As the sources state; "tested" means on at least one machine of that SoC.
 |---|---|
 | kernel | what the `@asahi` kernel supports (M1 and M2 families). The KVM patches act only on CPUs with Apple's ACTLR virtualization (M1: t8103, t6000, t6001, t6002; M2: t8112, t6020, t6021, t6022); tested on t6001 |
 | dkms-apple-avd | M1 family (t8103, t6000, t6001, t6002); t8112: H.264 works, HEVC times out (open) |
-| apple-ave | t6000, t8103 (H.264 without B frames), t8112; t6001 and t6002 only after per-machine preparation. All with the macOS 13.5 system firmware |
+| apple-ave | t6000, t8103 (H.264 without B frames), t8112; t6001 and t6002 after enabling them (not yet run in this configuration). All with the macOS 13.5 system firmware |
 | mesa-honeykrisp-plus | M1 and M2 GPUs, as Mesa's Asahi driver |
 | qemu-vmapple | hosts that run the kernel above; macOS 13 and 26 guests used on t6001 and t6002 hosts |
 
@@ -123,10 +123,13 @@ On a stock kernel the file does not exist. More in
 
 ## Firmware for the AVE encoder
 
-No Apple firmware is in this repository or its packages. Each user extracts
-it for their own Mac from Apple's macOS 13.5 IPSW, with the tools of the
-AVE driver repository, and installs it with `install-firmware`, which checks
-each file's sha256: [docs/apple-ave-firmware.md](docs/apple-ave-firmware.md).
+No Apple firmware, and no data taken from Apple's files, is in this
+repository or its packages. `apple-ave-fetch-firmware` makes the files on
+your Mac from Apple's macOS 13.5 restore image (read in place with HTTP
+range requests: about 0.5 MB, plus a 26 MB kernelcache unless the Asahi
+installer left one on the EFI partition), a local IPSW or a directory, and
+checks each against known sha256 values:
+[packages/apple-ave/apple-ave-firmware.md](packages/apple-ave/apple-ave-firmware.md).
 
 ## Update policy
 

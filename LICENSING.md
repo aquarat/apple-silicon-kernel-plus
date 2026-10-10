@@ -48,18 +48,28 @@ The driver is the Fedora Asahi kernel's `drivers/media/platform/apple/avd`:
 
 ## apple-ave
 
-From [aquarat/apple-m-series-ave-driver](https://github.com/aquarat/apple-m-series-ave-driver),
-`driver/` and `test/` (here `overlay/`). Every file carries
-`SPDX-License-Identifier: GPL-2.0-only`.
+From [aquarat/apple-m-series-ave-driver](https://github.com/aquarat/apple-m-series-ave-driver):
+`driver/`, `test/` (here `overlay/`) and `tools/ave_fwgen.py` (here
+`firmware/ave_fwgen.py`). Every file carries
+`SPDX-License-Identifier: GPL-2.0-only`, as do this project's
+`apple-ave-fetch-firmware`, `ave-load`, `install-firmware` and tests.
 
-The driver's register addresses, command layouts and other constants were
-found by studying Apple's firmware and macOS driver, to make the encoder
-usable from Linux (interoperability). The upstream repository documents how
-each was found.
+The driver's register addresses, command layouts and other interface facts
+were found by studying Apple's firmware and macOS driver, to make the
+encoder usable from Linux (interoperability). The upstream repository
+documents how each was found, and its docs/100 lists every item derived
+from Apple's files and why it is a fact rather than copied data.
 
-No Apple firmware is in this repository or in any package built from it.
-Users extract it from their own Mac or from Apple's IPSW
-([docs/apple-ave-firmware.md](docs/apple-ave-firmware.md)).
+No Apple firmware and no data taken from Apple's files (firmware images,
+register tables, boot-loader data) is in this repository or in any package
+built from it. Users make those files on their own Mac from Apple's
+restore image or their own copy of it
+([packages/apple-ave/apple-ave-firmware.md](packages/apple-ave/apple-ave-firmware.md)).
+`known-hashes.txt` holds only sha256 values and sizes, to verify them.
+
+At run time `apple-ave-fetch-firmware` uses the `lzfse` command (Apple's
+reference LZFSE implementation, `BSD-3-Clause`, Fedora's `lzfse` package)
+to decompress the kernelcache; it is a separate program, not linked.
 
 ## mesa-honeykrisp-plus
 
