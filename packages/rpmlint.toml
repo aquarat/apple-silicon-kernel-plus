@@ -1,0 +1,15 @@
+# rpmlint configuration for this project's packages:
+#   rpmlint -c packages/rpmlint.toml <package>.src.rpm|.rpm|.spec
+# The kernel is @asahi's spec and is not linted here.
+Filters = [
+    # Project words (asahi, dkms, depmod, ...) are not in the dictionary.
+    'spelling-error',
+    # DKMS packages ship sources under /usr/src by design.
+    'devel-file-in-non-devel-package /usr/src/',
+    'only-non-binary-in-usr-lib',
+    # Sources made by scripts/make-srpm.sh have no download URL.
+    'invalid-url Source[0-9]+: (apple-av[de]|reims-vgpu|qemu-vmapple)',
+    # Nothing to test at build time: DKMS builds on the target.
+    'no-%check-section',
+    'empty-%postun',
+]

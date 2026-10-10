@@ -9,5 +9,5 @@ RUN dnf -y install --setopt=install_weak_deps=False \
         git-core curl ca-certificates python3 make patch diffutils findutils \
         meson ninja-build cargo rust ShellCheck \
         python3-rpm-macros systemd-rpm-macros gcc flex bison bc perl-interpreter openssl-devel \
-        elfutils-libelf-devel dwarves hostname kmod which openssl \
+        elfutils-libelf-devel dwarves hostname kmod which openssl glibc-langpack-en \
     && dnf clean all
