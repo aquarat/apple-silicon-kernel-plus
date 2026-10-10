@@ -1,0 +1,131 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Test overlay: the AVE node plus its TWO DART instances.
+ *
+ * Deliberately omits the DART and the "iommus" property. apple-dart programs
+ * registers on probe and is the leading suspect for the 2026-09-07 hang
+ * (docs/24); apple-ave needs no IOMMU until it does DMA, which is several
+ * stages away. Reintroduce the DART later as its own experiment, after
+ * resolving why the ADT gives dart-ave0 four reg ranges when every
+ * apple,t6000-dart node in the live tree has one.
+ *
+ * Sentinel phandles 0xa7e000NN (the base tree has no __symbols__), which
+ * ave_overlay_mod.c replaces at load time with the live phandles (docs/79
+ * §3). NN is the stock t6001 phandle; what it pointed at there is what the
+ * module looks up (earlier comments here named 0xc2-0xc5 dma/pipe4/pipe5/me0,
+ * which the stock DT does not bear out):
+ *   0x13  the AIC (compatible)   0x1d  venc_sys (label; also resets)
+ *   0xc2  venc_pipe5             0xc4  venc_me0
+ *   0xc3  venc_pipe4             0xc5  afnc4_ioa
+ *
+ * All five referenceable domains are listed rather than relying on genpd to
+ * pull ancestors up. venc_me1 has no phandle in the base tree so cannot be
+ * referenced from an overlay; its parent venc_me0 is the deepest we can reach.
+ *
+ * Compile WITHOUT -@: that flag emits a __symbols__ node the live tree lacks,
+ * and the overlay is then rejected with -EINVAL.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target-path = "/soc";
+
+		__overlay__ {
+			#address-cells = <2>;
+			#size-cells = <2>;
+
+			/*
+			 * ADT dart-ave0 has four reg ranges but only TWO are
+			 * DARTs. The ADT "instance" property decodes to
+			 * DAPF:CPUDART, DART:DART, SMMU:SMMU, and the layout is
+			 * DARTs first, then SMMUs, then one DAPF at
+			 * first-DART+0x4000:
+			 *
+			 *   reg[0] 0x40d040000  CPUDART  (DART)
+			 *   reg[1] 0x40d030000  DART     (DART)
+			 *   reg[2] 0x40d020000  SMMU     - NOT a DART
+			 *   reg[3] 0x40d044000  DAPF     - NOT a DART
+			 *
+			 * ADT dart-isp0 confirms the rule: five entries over
+			 * six regs, and Linux models exactly reg[0..2].
+			 * Pointing apple-dart at the SMMU or the DAPF makes it
+			 * write DART register layouts into blocks that are not
+			 * DARTs.
+			 *
+			 * Both DARTs share ONE interrupt (1028). Linux models multi-instance DARTs
+			 * as separate single-reg nodes that all carry the same
+			 * shared interrupt - ADT dart-isp0 has six instances on
+			 * interrupt 543, and Linux's iommu@3860e8000,
+			 * @3860f4000 and @3860fc000 each declare 0x21f.
+			 *
+			 * Modelling only instance 0 caused an interrupt storm:
+			 * apple-dart initialised and unmasked instance 0, the
+			 * other three kept the shared line asserted with
+			 * nothing able to clear them, every IRQ returned
+			 * IRQ_NONE, and the kernel force-disabled IRQ 130.
+			 * All four instances must be present.
+			 */
+			dart_ave0_0: iommu@40d040000 {
+				compatible = "apple,t6000-dart";
+				reg = <0x4 0x0d040000 0x0 0x4000>;
+				interrupt-parent = <0xa7e00013>;
+				interrupts = <0 0 1028 4>;
+				#iommu-cells = <1>;
+				power-domains = <0xa7e0001d>;
+			};
+
+			dart_ave0_1: iommu@40d030000 {
+				compatible = "apple,t6000-dart";
+				reg = <0x4 0x0d030000 0x0 0x4000>;
+				interrupt-parent = <0xa7e00013>;
+				interrupts = <0 0 1028 4>;
+				#iommu-cells = <1>;
+				power-domains = <0xa7e0001d>;
+			};
+
+			ave0: video-encoder@40d100000 {
+				compatible = "apple,t6001-ave", "apple,ave";
+				/* CPU physical = ADT bus + 0x2_00000000, per
+				 * /arm-io "ranges". See tools/check_addrs.py. */
+				reg = <0x4 0x0d100000 0x0 0x45c000>,
+				      <0x4 0x0d800000 0x0 0x800000>,
+				      <0x4 0x0d050000 0x0 0x008000>,
+				      <0x2 0x8e588000 0x0 0x000024>,
+				      <0x4 0x0c000000 0x0 0x1000000>;
+				reg-names = "dpe", "asc", "sve", "unk3", "axi2af";
+				interrupt-parent = <0xa7e00013>;
+				interrupts = <0 0 1031 4>;
+				power-domains = <0xa7e0001d>, <0xa7e000c2>, <0xa7e000c4>,
+						<0xa7e000c3>, <0xa7e000c5>;
+				/* apple-avd does reset_control_reset() before its
+				 * first register access; #reset-cells is 0 */
+				resets = <0xa7e0001d>;
+				/*
+				 * Only the real DART.
+				 *
+				 * The ADT dart-ave0 node has four reg entries
+				 * but its "instance" property names three
+				 * different things: DAPF (CPUDART), DART and
+				 * SMMU. Listing two of them as
+				 * apple,t6000-dart modelled a non-translating
+				 * block as an IOMMU, and Linux agrees they
+				 * are not alike: 40d040000 probes with
+				 * "bypass support: 1", 40d030000 with "0".
+				 *
+				 * That mattered once bypass became the goal.
+				 * An identity domain needs bypass on every
+				 * DART in the group, so the bogus second
+				 * entry made /sys/kernel/iommu_groups/N/type
+				 * reject "identity" with -EINVAL.
+				 *
+				 * 40d040000 is the one the core actually
+				 * fetches through - every translation fault
+				 * we have seen came from it.
+				 */
+				iommus = <&dart_ave0_0 0>;
+			};
+		};
+	};
+};

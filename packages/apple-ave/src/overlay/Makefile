@@ -1,0 +1,146 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# The ave-overlay module: applies the device-tree overlay that describes the
+# encoder. See ave_overlay_mod.c. (The upstream AVE repository's test/ also
+# builds read-only diagnostics; this package leaves them out.)
+obj-m += ave-overlay.o
+ave-overlay-y := ave_overlay_mod.o
+
+KDIR ?= /lib/modules/$(shell uname -r)/build
+PWD  := $(shell pwd)
+
+all: ave_overlay_dtbo.h ave_overlay_noiommu_dtbo.h ave_overlay_e2_dtbo.h \
+     ave_overlay_e3_dtbo.h ave_overlay_e4_dtbo.h \
+     ave_overlay_e5_dtbo.h ave_overlay_e6_dtbo.h ave_overlay_e7_dtbo.h ave_overlay_pmp_venc_dtbo.h ave_overlay_pmp_venc_t8112_dtbo.h \
+     ave_overlay_t6000_dtbo.h ave_overlay_t8103_dtbo.h ave_overlay_t8112_dtbo.h \
+     ave_overlay_t6002_dtbo.h ave_overlay_t6002_die0_dtbo.h ave_overlay_t6002_ave2_dtbo.h \
+     ave_overlay_t6002_all_dtbo.h
+	$(MAKE) -C $(KDIR) M=$(PWD) modules
+
+# Build from the no-DART overlay. Building from ave-overlay.dts silently
+# reintroduced the DART node for four bring-up attempts and was only caught by
+# decoding the committed header - see docs/30-address-translation-bug.md.
+ave_overlay_dtbo.h: ave-overlay-nodart.dtbo
+	python3 mkhdr.py $< ave_overlay_dtbo $@
+
+ave-overlay-nodart.dtbo: ave-overlay-nodart.dts
+	dtc -I dts -O dtb -o $@ $< 2>/dev/null
+
+# The no-IOMMU variant, selected at insmod time (variant=1) rather than at
+# build time, so the choice of risk level is made when the module is loaded
+# and not baked in here.
+ave_overlay_noiommu_dtbo.h: ave-overlay-noiommu.dtbo
+	python3 mkhdr.py $< ave_overlay_noiommu_dtbo $@
+
+ave-overlay-noiommu.dtbo: ave-overlay-noiommu.dts
+	dtc -I dts -O dtb -o $@ $< 2>/dev/null
+
+# docs/44 E2/E3 variants (variant=2 and variant=3): the variant=1 and variant=0
+# nodes with "cpudart" and "dapf" reg entries appended.
+ave_overlay_e2_dtbo.h: ave-overlay-e2.dtbo
+	python3 mkhdr.py $< ave_overlay_e2_dtbo $@
+
+ave-overlay-e2.dtbo: ave-overlay-e2.dts
+	dtc -I dts -O dtb -o $@ $< 2>/dev/null
+
+ave_overlay_e3_dtbo.h: ave-overlay-e3.dtbo
+	python3 mkhdr.py $< ave_overlay_e3_dtbo $@
+
+ave-overlay-e3.dtbo: ave-overlay-e3.dts
+	dtc -I dts -O dtb -o $@ $< 2>/dev/null
+
+# variant=4 (docs/56): variant=3 with both DART nodes in iommus, like ISP.
+ave_overlay_e4_dtbo.h: ave-overlay-e4.dtbo
+	python3 mkhdr.py $< ave_overlay_e4_dtbo $@
+
+ave-overlay-e4.dtbo: ave-overlay-e4.dts
+	dtc -I dts -O dtb -o $@ $< 2>/dev/null
+
+clean:
+	$(MAKE) -C $(KDIR) M=$(PWD) clean
+	rm -f ave_overlay_dtbo.h ave_overlay_noiommu_dtbo.h \
+	      ave_overlay_e2_dtbo.h ave_overlay_e3_dtbo.h ave_overlay_e4_dtbo.h \
+     ave_overlay_e5_dtbo.h \
+	      ave-overlay-nodart.dtbo ave-overlay-noiommu.dtbo ave-overlay.dtbo \
+	      ave-overlay-e2.dtbo ave-overlay-e3.dtbo ave-overlay-e4.dtbo
+
+ave_overlay_e5_dtbo.h: ave-overlay-e5.dtbo
+	python3 mkhdr.py $< ave_overlay_e5_dtbo $@
+
+ave-overlay-e5.dtbo: ave-overlay-e5.dts
+	dtc -I dts -O dtb -o $@ $< 2>/dev/null
+
+ave_overlay_pmp_venc_dtbo.h: ave-overlay-pmp-venc.dtbo
+	python3 mkhdr.py $< ave_overlay_pmp_venc_dtbo $@
+
+ave-overlay-pmp-venc.dtbo: ave-overlay-pmp-venc.dts
+	dtc -I dts -O dtb -o $@ $< 2>/dev/null
+
+# variant=6 (docs/82): ave1 alone
+ave_overlay_e6_dtbo.h: ave-overlay-e6.dtbo
+	python3 mkhdr.py $< ave_overlay_e6_dtbo $@
+
+ave-overlay-e6.dtbo: ave-overlay-e6.dts
+	dtc -I dts -O dtb -o $@ $< 2>/dev/null
+
+# variant=7 (docs/82): both encoders
+ave_overlay_e7_dtbo.h: ave-overlay-e7.dtbo
+	python3 mkhdr.py $< ave_overlay_e7_dtbo $@
+
+ave-overlay-e7.dtbo: ave-overlay-e7.dts
+	dtc -I dts -O dtb -o $@ $< 2>/dev/null
+
+# variant=8 (docs/87): t6000 (M1 Pro) ave0
+ave_overlay_t6000_dtbo.h: ave-overlay-t6000.dtbo
+	python3 mkhdr.py $< ave_overlay_t6000_dtbo $@
+
+ave-overlay-t6000.dtbo: ave-overlay-t6000.dts
+	dtc -I dts -O dtb -o $@ $< 2>/dev/null
+
+# variant=9: t8103 (M1) sibling of e4, docs/79 §3 step 5 (t8103-port, henriSchulz)
+ave_overlay_t8103_dtbo.h: ave-overlay-t8103.dtbo
+	python3 mkhdr.py $< ave_overlay_t8103_dtbo $@
+
+ave-overlay-t8103.dtbo: ave-overlay-t8103.dts
+	dtc -I dts -O dtb -o $@ $< 2>/dev/null
+
+# variant=10 (docs/90): t8112 (M2)
+ave_overlay_t8112_dtbo.h: ave-overlay-t8112.dtbo
+	python3 mkhdr.py $< ave_overlay_t8112_dtbo $@
+
+ave-overlay-t8112.dtbo: ave-overlay-t8112.dts
+	dtc -I dts -O dtb -o $@ $< 2>/dev/null
+
+# pmp_venc=1 on t8112 (docs/90 §9): report@9
+ave_overlay_pmp_venc_t8112_dtbo.h: ave-overlay-pmp-venc-t8112.dtbo
+	python3 mkhdr.py $< ave_overlay_pmp_venc_t8112_dtbo $@
+
+ave-overlay-pmp-venc-t8112.dtbo: ave-overlay-pmp-venc-t8112.dts
+	dtc -I dts -O dtb -o $@ $< 2>/dev/null
+
+# variants 11-14 (docs/98): t6002 (M1 Ultra). The per-encoder nodes are in
+# t6002-ave{0,1,2,3}.dtsi, pulled in with dtc's own /include/.
+T6002_DTSI := t6002-ave0.dtsi t6002-ave1.dtsi t6002-ave2.dtsi t6002-ave3.dtsi
+
+ave_overlay_t6002_dtbo.h: ave-overlay-t6002.dtbo
+	python3 mkhdr.py $< ave_overlay_t6002_dtbo $@
+
+ave-overlay-t6002.dtbo: ave-overlay-t6002.dts $(T6002_DTSI)
+	dtc -I dts -O dtb -o $@ $< 2>/dev/null
+
+ave_overlay_t6002_die0_dtbo.h: ave-overlay-t6002-die0.dtbo
+	python3 mkhdr.py $< ave_overlay_t6002_die0_dtbo $@
+
+ave-overlay-t6002-die0.dtbo: ave-overlay-t6002-die0.dts $(T6002_DTSI)
+	dtc -I dts -O dtb -o $@ $< 2>/dev/null
+
+ave_overlay_t6002_ave2_dtbo.h: ave-overlay-t6002-ave2.dtbo
+	python3 mkhdr.py $< ave_overlay_t6002_ave2_dtbo $@
+
+ave-overlay-t6002-ave2.dtbo: ave-overlay-t6002-ave2.dts $(T6002_DTSI)
+	dtc -I dts -O dtb -o $@ $< 2>/dev/null
+
+ave_overlay_t6002_all_dtbo.h: ave-overlay-t6002-all.dtbo
+	python3 mkhdr.py $< ave_overlay_t6002_all_dtbo $@
+
+ave-overlay-t6002-all.dtbo: ave-overlay-t6002-all.dts $(T6002_DTSI)
+	dtc -I dts -O dtb -o $@ $< 2>/dev/null

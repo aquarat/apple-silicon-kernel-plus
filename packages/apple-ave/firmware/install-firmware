@@ -1,0 +1,46 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Install Apple AVE firmware files that the user extracted for their own Mac,
+# refusing any file whose sha256 is not in known-hashes.txt.
+#
+#   install-firmware DIR        DIR/<file> or DIR/apple/<file> -> /lib/firmware/apple/<file>
+#   install-firmware --check    report what /lib/firmware has
+#
+# How to make the files: /usr/share/doc/apple-ave/README.md (Firmware).
+# Run as root to install. Nothing is downloaded.
+set -euo pipefail
+LIST=${KNOWN_HASHES:-/usr/share/apple-ave/firmware/known-hashes.txt}
+[ -f "$LIST" ] || LIST=$(cd "$(dirname "$0")" && pwd)/known-hashes.txt
+DEST=${FIRMWARE_DIR:-/lib/firmware}
+
+known() { grep -v '^#' "$LIST" | awk -v p="$1" '$2 == p {print $1}'; }
+
+if [ "${1:-}" = --check ]; then
+    grep -v '^#' "$LIST" | awk 'NF {print $2}' | while read -r p; do
+        f=$DEST/$p
+        if [ -e "$f" ]; then
+            s=$(sha256sum "$f" | cut -d' ' -f1)
+            if [ "$s" = "$(known "$p")" ]; then echo "ok       $p"; else echo "MISMATCH $p ($s)"; fi
+        else
+            echo "absent   $p"
+        fi
+    done
+    exit 0
+fi
+
+SRC=${1:?usage: $0 DIR | --check}
+[ "$(id -u)" = 0 ] || { echo "run as root to install into $DEST" >&2; exit 1; }
+n=0
+shopt -s nullglob
+for f in "$SRC"/*.bin "$SRC"/apple/*.bin; do
+    p=apple/$(basename "$f")
+    want=$(known "$p")
+    [ -n "$want" ] || { echo "skip     $p (not in known-hashes.txt)"; continue; }
+    have=$(sha256sum "$f" | cut -d' ' -f1)
+    [ "$have" = "$want" ] || { echo "REFUSE   $p: sha256 $have, expected $want"; continue; }
+    install -D -m 0644 "$f" "$DEST/$p"
+    echo "install  $p"
+    n=$((n + 1))
+done
+if [ $n -gt 0 ] && command -v restorecon >/dev/null; then restorecon -R "$DEST/apple" || :; fi
+echo "$n file(s) installed"

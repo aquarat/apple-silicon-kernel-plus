@@ -1,0 +1,1654 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Apple AVE - CPUDART and DAPF: read-only dump (docs/44 E2) and filter
+ * programming (docs/44 E3).
+ *
+ * UNTESTED. Compiled only; nothing here has run on hardware. Read
+ * docs/44-reset-fetch-path.md and docs/48-e1-e3-procedure.md first.
+ *
+ * Why this exists: every AVE DART fault we logged is code 0x800, which is
+ * NO_DAPF_MATCH (m1n1 proxyclient/m1n1/hw/dart8020.py R_ERROR bit 11). The
+ * DART's address filter (DAPF) refused the fetch before any page-table walk.
+ * Linux never programs a DAPF; m1n1 does so only for aop/mtp/pmp/isp
+ * (m1n1 src/dapf.c:173-176). AVE's DAPF is dart-ave0 reg[3], AP 0x40d044000.
+ *
+ * Nothing here runs unless a module parameter asks for it:
+ *
+ *   dapf_dump=1          E2: map and dump, reads only.
+ *   dapf_set=control     E3 negative control: 0x1f0 window + MMIO, NO TEXT.
+ *   dapf_set=text        E3: 0x1f0 window + MMIO + iBoot TEXT (physical).
+ *   dapf_mmio=ave0|adt|both|none   which MMIO entry goes with dapf_set.
+ *
+ * Register access discipline:
+ *   - the blocks are mapped with devm_ioremap(), never requested: in the
+ *     variant=3 overlay apple-dart owns 0x40d040000 and has requested it;
+ *   - nothing is read or written unless the stage 6 runtime-PM reference is
+ *     held (ave->powered and pm_runtime_active()), because a read of a
+ *     power-gated block hangs the fabric;
+ *   - the resource addresses are checked against the ADT-derived constants
+ *     and against each other (DAPF = CPUDART + 0x4000) before any mapping, so
+ *     a wrong overlay refuses instead of reading somewhere else (docs/00
+ *     trap 7);
+ *   - if the device has an "iommus" DART, it must be the same block as
+ *     "cpudart", or we would be dumping a DART the core does not use.
+ */
+
+#include <linux/iommu.h>
+#include <linux/io.h>
+#include <linux/iopoll.h>
+#include <linux/vmalloc.h>
+#include <linux/delay.h>
+#include <linux/uaccess.h>
+#include <linux/debugfs.h>
+#include <linux/of.h>
+#include <linux/of_address.h>
+#include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
+#include <linux/string.h>
+
+#include "ave.h"
+#include "ave_dapf.h"
+
+/*
+ * DART register offsets, t8020/t6000 layout.
+ *
+ * Sources: Linux drivers/iommu/apple-dart.c (asahi branch, fetched
+ * 2026-09-13) lines 45-89, and m1n1 proxyclient/m1n1/hw/dart8020.py
+ * DART8020Regs, which agree on every offset both define. PARAMS1/2 are from
+ * apple-dart.c only; REMAP, DAPF_LOCK and UNK1 are from dart8020.py only.
+ */
+#define DART_PARAMS1		0x00	/* apple-dart.c:45 */
+#define DART_PARAMS2		0x04	/* apple-dart.c:48, bit 0 bypass support */
+/* ENABLED_STREAMS reads 0x0000ffff on both AVE DARTs: sixteen of them. */
+#define DART_STREAM_COUNT	16
+#define DART_ERROR		0x40	/* apple-dart.c:59, dart8020.py ERROR */
+#define DART_ERROR_ADDR_LO	0x50	/* apple-dart.c:76 */
+#define DART_ERROR_ADDR_HI	0x54	/* apple-dart.c:75 */
+#define DART_CONFIG		0x60	/* apple-dart.c:70, bit 15 LOCK */
+#define DART_REMAP(i)		(0x80 + 4 * (i))	/* dart8020.py REMAP */
+#define DART_DAPF_LOCK		0xf0	/* dart8020.py, bit 0 LOCK */
+#define DART_UNK1		0xf8	/* dart8020.py */
+#define DART_ENABLED_STREAMS	0xfc	/* apple-dart.c:78 */
+#define DART_TCR(sid)		(0x100 + 4 * (sid))		/* apple-dart.c:80 */
+#define DART_TTBR(sid, i)	(0x200 + 0x10 * (sid) + 4 * (i))	/* :85, x4 */
+#define DART_MAP_SIZE		0x400	/* covers every offset above */
+
+#define DART_CONFIG_LOCK	BIT(15)
+#define DART_DAPF_LOCK_BIT	BIT(0)
+#define DART_TCR_TRANSLATE	BIT(7)	/* apple-dart.c:81 */
+#define DART_TCR_BYPASS_DART	BIT(8)	/* apple-dart.c:82 */
+#define DART_TCR_BYPASS_DAPF	BIT(12)	/* apple-dart.c:83 */
+#define DART_TTBR_VALID		BIT(31)
+
+/* ERROR bits, dart8020.py R_ERROR. apple-dart.c names only bits 0-4. */
+#define DART_ERR_FLAG		BIT(31)
+#define DART_ERR_STREAM(v)	(((v) >> 24) & 0xf)
+#define DART_ERR_NO_DAPF_MATCH	BIT(11)
+#define DART_ERR_WRITE		BIT(10)
+#define DART_ERR_SUBPAGE_PROT	BIT(7)
+#define DART_ERR_PTE_READ_FAULT	BIT(6)
+#define DART_ERR_READ_FAULT	BIT(4)
+#define DART_ERR_WRITE_FAULT	BIT(3)
+#define DART_ERR_NO_PTE		BIT(2)
+#define DART_ERR_NO_PMD		BIT(1)
+#define DART_ERR_NO_TTBR	BIT(0)
+
+/*
+ * DART register layouts. The defines above are the t8020/t6000 DART's
+ * (apple-dart.c DART_T8020_*), which t8103, t6000 and t6001 use. t8112's
+ * dart-ave is a "dart,t8110" (ADT), the newer layout (apple-dart.c
+ * DART_T8110_*): TCR/TTBR elsewhere, one TTBR per stream, other bits.
+ * Every TCR/TTBR/ERROR access below goes through the SoC's layout.
+ */
+struct ave_dart_layout {
+	const char	*name;
+	u32		tcr, tcr_translate, tcr_bypass_dart, tcr_bypass_dapf;
+	u32		ttbr, ttbr_sid_stride, ttbr_count, ttbr_valid;
+	u32		error, error_addr_lo, error_addr_hi;
+	u32		map_size;	/* bytes of the DART mapped */
+	bool		t8020;		/* PARAMS/CONFIG/REMAP/DAPF_LOCK exist as above */
+};
+
+static const struct ave_dart_layout ave_dart_t8020 = {
+	.name = "t8020", .tcr = DART_TCR(0), .tcr_translate = DART_TCR_TRANSLATE,
+	.tcr_bypass_dart = DART_TCR_BYPASS_DART, .tcr_bypass_dapf = DART_TCR_BYPASS_DAPF,
+	.ttbr = DART_TTBR(0, 0), .ttbr_sid_stride = 0x10, .ttbr_count = 4,
+	.ttbr_valid = DART_TTBR_VALID, .error = DART_ERROR,
+	.error_addr_lo = DART_ERROR_ADDR_LO, .error_addr_hi = DART_ERROR_ADDR_HI,
+	.map_size = DART_MAP_SIZE, .t8020 = true,
+};
+
+/* apple-dart.c DART_T8110_TCR 0x1000, _TTBR 0x1400 (ttbr_count 1), _ERROR 0x100 */
+static const struct ave_dart_layout ave_dart_t8110 = {
+	.name = "t8110", .tcr = 0x1000, .tcr_translate = BIT(0),
+	.tcr_bypass_dart = BIT(1), .tcr_bypass_dapf = BIT(2),
+	.ttbr = 0x1400, .ttbr_sid_stride = 4, .ttbr_count = 1,
+	.ttbr_valid = BIT(0), .error = 0x100,
+	.error_addr_lo = 0x170, .error_addr_hi = 0x174,
+	.map_size = 0x4000, .t8020 = false,
+};
+
+static const struct ave_dart_layout *ave_dart(const struct ave_device *ave)
+{
+	return ave->soc->dart_t8110 ? &ave_dart_t8110 : &ave_dart_t8020;
+}
+
+#define DL_TCR(l, sid)		((l)->tcr + 4 * (sid))
+#define DL_TTBR(l, sid, i)	((l)->ttbr + (l)->ttbr_sid_stride * (sid) + 4 * (i))
+
+/* apple-dart.c DART_T8110_TLB_CMD / _ENABLE_STREAMS */
+#define DART_T8110_TLB_CMD		0x80
+#define DART_T8110_TLB_CMD_BUSY		BIT(31)
+#define DART_T8110_TLB_CMD_FLUSH_SID	(1 << 8)
+#define DART_T8110_ENABLE_STREAMS	0xc00
+
+/*
+ * A t8110 DART caches its stream state: rewritten TTBR/TCR registers read
+ * back right but are not used until that stream's TLB is flushed (docs/90:
+ * "NO TTBR FOR IOVA" from a TTBR that read back VALID). apple-dart.c
+ * apple_dart_t8110_hw_tlb_command, one stream.
+ */
+static int ave_dart_t8110_flush_sid(struct ave_device *ave, void __iomem *base,
+				    unsigned int sid)
+{
+	u32 v;
+	int ret;
+
+	writel(DART_T8110_TLB_CMD_FLUSH_SID | sid, base + DART_T8110_TLB_CMD);
+	ret = readl_poll_timeout_atomic(base + DART_T8110_TLB_CMD, v,
+					!(v & DART_T8110_TLB_CMD_BUSY), 1, 100);
+	if (ret)
+		dev_err(ave->dev, "dart: t8110 TLB flush of SID %u did not complete (%#x)\n",
+			sid, v);
+	return ret;
+}
+
+/* DAPF entry layout, m1n1 src/dapf.c:35-41 (dapf_init_t8020). */
+#define DAPF_ENTRY(i)		(0x40 * (i))
+#define DAPF_R0			0x00	/* 32-bit, written last */
+#define DAPF_R4			0x04	/* 32-bit */
+#define DAPF_START		0x08	/* 64-bit */
+#define DAPF_END		0x10	/* 64-bit, inclusive */
+#define DAPF_R20		0x20	/* 32-bit, t8110 DARTs only (m1n1 dapf_init_t8110a) */
+#define DAPF_MAP_SIZE		(0x40 * AVE_DAPF_MAX_ENTRIES)
+
+/*
+ * AVE_DAPF_END_INCLUSIVE - why @end is the last admitted byte.
+ *
+ * m1n1 copies the ADT's end value into the register unmodified
+ * (dapf.c:38), so whatever convention the ADT uses is the hardware's. The
+ * ADT answers it: dart-isp0's filter-data-instance-0 (13.5 and restore ADTs,
+ * identical) contains
+ *
+ *   0x28ec3c000 - 0x28ec3c003      one 32-bit register
+ *   0x285460000 - 0x285460003      one 32-bit register
+ *   0x28e584000 - 0x28e584043      a block ending in a 32-bit register at +0x40
+ *   0x28e0b8000 - 0x28e0bffff      32 KiB
+ *   0x1f000000000 - 0x1f0ffffffff  4 GiB
+ *
+ * An exclusive end would make the first two three bytes long. So end is
+ * inclusive. Inferred from data, not from a disassembled comparison.
+ *
+ * The odd ones out are dart-ave0/1's MMIO entries ending in ...000
+ * (0x507c6c000, 0x40dc69000): read inclusively they admit one byte of the
+ * following page. Programmed verbatim, as m1n1 would.
+ */
+
+/*
+ * The ADT entries. /arm-io/dart-ave{0,1} filter-data-instance-0 in
+ * data/blobs/macos-13.5/adt.bin, decoded with m1n1's dapf_t8020_config
+ * layout (dapf.c:12-20): {u64 start, u64 end, u8 unk1, u8 r0_hi, u8 r0_lo,
+ * u8 unk2, u32 r4}, r0 = (r0_hi << 4) | r0_lo. Addresses are AP-physical.
+ *
+ * END ADDRESSES ARE STORED WITH THE LOW TWO BITS CLEAR. E1 (2026-09-13) read
+ * ISP's live DAPF, which m1n1 programmed from the ADT: 0x1f0ffffffff reads
+ * back 0x1f0fffffffc, 0x28e584043 reads 0x28e584040. So the register holds
+ * the inclusive address of the last admitted 4-byte word. Programming the
+ * ADT value verbatim would fail the readback check, so the values here are
+ * already masked.
+ */
+/* The fixed entries, from the SoC table (addresses) and docs/49 (flags). */
+static struct ave_dapf_entry ave_dapf_mk(const struct ave_soc_range *r,
+					 u32 r0, const char *what)
+{
+	return (struct ave_dapf_entry){
+		.start = r->start, .end = r->end, .r0 = r0, .r4 = 1, .what = what,
+	};
+}
+
+static struct ave_dapf_entry ave_dapf_window(struct ave_device *ave)
+{
+	return ave_dapf_mk(&ave->soc->dapf_window, 0x33,
+			   "0x1f0 window (dart-ave0[0], dart-ave1[0], dart-isp0[0])");
+}
+
+/* ave0's own SVE..ASC span, listed under dart-ave1 (docs/44 addendum). */
+static struct ave_dapf_entry ave_dapf_mmio_ave0(struct ave_device *ave)
+{
+	return ave_dapf_mk(&ave->soc->dapf_mmio_own, 0x31,
+			   "MMIO ave0-own (listed as dart-ave1[1])");
+}
+
+/* What the ADT lists under dart-ave0: ave1's fabric..ASC. */
+static struct ave_dapf_entry ave_dapf_mmio_adt(struct ave_device *ave)
+{
+	return ave_dapf_mk(&ave->soc->dapf_mmio_adt, 0x31,
+			   "MMIO as listed (dart-ave0[1], ave1's span)");
+}
+
+/*
+ * iBoot's TEXT, physical, as the bootstrap addresses it (docs/44 §2.4).
+ *
+ * r0 = 0x11 is copied from ISP's live DAPF (E1, 2026-09-13): slot 0 there is
+ * 0x10000c68000 - 0x100015e7ffc, r0 0x11, r4 1 - exactly ISP's TEXT
+ * carve-out, which is what ISP's locked RVBAR points at. That entry is not in
+ * the restore ADT; iBoot injects it. The meaning of the r0 bits is still
+ * unknown, but 0x11 is what a working ASC on this machine uses for the same
+ * job. (This entry first copied the window's 0x33.)
+ */
+static struct ave_dapf_entry ave_dapf_text(struct ave_device *ave)
+{
+	const struct ave_soc_range r = {
+		.start = ave->soc->iboot.text_phys,
+		.end = ave->soc->iboot.text_phys + ave->soc->iboot.text_size - 4,
+	};
+
+	return ave_dapf_mk(&r, 0x11, "iBoot TEXT, physical");
+}
+
+static const struct ave_dapf_entry ave_dapf_cleared = {
+	.what = "cleared",
+};
+
+static char *dapf_order = "m1n1";
+module_param(dapf_order, charp, 0444);
+MODULE_PARM_DESC(dapf_order,
+		 "E3: m1n1 (default; ADT order, only the needed slots, r4/start/end/r0, no pre-clear) | clear16-resets-machine (all 16 slots, r0=0 first - this reset the SoC on 2026-09-13)");
+
+static bool dapf_quiesce = true;
+module_param(dapf_quiesce, bool, 0444);
+MODULE_PARM_DESC(dapf_quiesce,
+		 "E3: zero every TCR and ENABLED_STREAMS around the DAPF writes, then restore (default 1; docs/49 N1)");
+
+static int dapf_probe;
+module_param(dapf_probe, int, 0444);
+MODULE_PARM_DESC(dapf_probe,
+		 "docs/49: 1 = N1b (30 s hold reading TCR every 2 s, then a same-value TCR write); 2 = N1e (30 s hold with NO register access at all, no write); 3 = N1f (120 s of N1b's reads, no write)");
+
+static int dapf_early;
+module_param(dapf_early, int, 0444);
+MODULE_PARM_DESC(dapf_early,
+		 "1 = program the DAPF at stage 8 (reset the SoC, N1j); 2 = at the end of stage 6, before the stage-7 SVE idle/clock-gating write (N1k)");
+
+int ave_dapf_early(void)
+{
+	return dapf_early;
+}
+
+static bool dapf_dump;
+module_param(dapf_dump, bool, 0444);
+MODULE_PARM_DESC(dapf_dump,
+		 "E2: dump CPUDART config and all 16 DAPF entries, read-only (needs overlay variant=2 or 3)");
+
+static char *dapf_set = "off";
+module_param(dapf_set, charp, 0444);
+MODULE_PARM_DESC(dapf_set,
+		 "E3: off (default) | control = 0x1f0 window + MMIO, no TEXT (negative control) | text = window + MMIO + iBoot TEXT");
+
+static char *dapf_mmio = "ave0";
+module_param(dapf_mmio, charp, 0444);
+MODULE_PARM_DESC(dapf_mmio,
+		 "E3 MMIO entry: ave0 (default; 0x40d050000-0x40dc69000, dart-ave1's entry) | adt (0x506000000-0x507c6c000, as dart-ave0 lists it) | both | none");
+
+
+static int ave_dapf_check_power(struct ave_device *ave)
+{
+	if (!ave->powered || !pm_runtime_active(ave->dev)) {
+		dev_err(ave->dev,
+			"dapf: REFUSING - no runtime-PM reference held (need stage 6); a read of a gated DART hangs the fabric\n");
+		return -EPERM;
+	}
+	return 0;
+}
+
+/*
+ * Map "cpudart" and "dapf". Idempotent. Validates the apparatus before the
+ * first mapping; it performs no register access itself.
+ */
+static void ave_iounmap_action(void *p)
+{
+	iounmap((void __iomem *)p);
+}
+
+/*
+ * A device-managed ioremap_np(): /soc is nonposted-mmio, and neither this
+ * kernel nor 7.1 has devm_ioremap_np(). Not a resource request, because
+ * apple-dart already owns the DART's region.
+ */
+void __iomem *ave_devm_ioremap_np(struct device *dev, phys_addr_t pa, size_t size)
+{
+	void __iomem *p = ioremap_np(pa, size);
+
+	if (!p || devm_add_action_or_reset(dev, ave_iounmap_action,
+					   (void __force *)p))
+		return NULL;
+	return p;
+}
+
+static int ave_dapf_map(struct ave_device *ave)
+{
+	struct platform_device *pdev = to_platform_device(ave->dev);
+	struct device_node *iommu_np;
+	struct resource *rd, *rf, ri = {};
+	int ret;
+
+	if (ave->cpudart && ave->dapf)
+		return 0;
+
+	rd = platform_get_resource_byname(pdev, IORESOURCE_MEM, "cpudart");
+	rf = platform_get_resource_byname(pdev, IORESOURCE_MEM, "dapf");
+	if (!rd || !rf) {
+		dev_err(ave->dev,
+			"dapf: node has no \"cpudart\"/\"dapf\" reg entries - load test/ave-overlay.ko variant=2 or variant=3\n");
+		return -ENODEV;
+	}
+
+	if (rd->start != ave->soc->cpudart_phys || rf->start != ave->soc->dapf_phys ||
+	    rf->start != rd->start + AVE_DAPF_OFFSET) {
+		dev_err(ave->dev,
+			"dapf: REFUSING - cpudart %pR / dapf %pR, expected %#llx / %#llx (DAPF = CPUDART + %#x)\n",
+			rd, rf, (u64)ave->soc->cpudart_phys, (u64)ave->soc->dapf_phys,
+			AVE_DAPF_OFFSET);
+		return -EINVAL;
+	}
+	if (resource_size(rd) < ave_dart(ave)->map_size || resource_size(rf) < DAPF_MAP_SIZE) {
+		dev_err(ave->dev, "dapf: REFUSING - cpudart %pR or dapf %pR too small\n",
+			rd, rf);
+		return -EINVAL;
+	}
+
+	/*
+	 * With a DART bound (variant=3) the dump must be of *that* DART. The
+	 * fault reports have always come from 40d040000; make sure the overlay
+	 * still says so.
+	 */
+	iommu_np = of_parse_phandle(ave->dev->of_node, "iommus", 0);
+	if (iommu_np) {
+		ret = of_address_to_resource(iommu_np, 0, &ri);
+		of_node_put(iommu_np);
+		if (ret || ri.start != rd->start) {
+			dev_err(ave->dev,
+				"dapf: REFUSING - iommus DART is %pR (ret %d), \"cpudart\" is %pR\n",
+				&ri, ret, rd);
+			return -EINVAL;
+		}
+	}
+
+	/*
+	 * Non-posted, as /soc's nonposted-mmio makes every resource mapping.
+	 * Every DAPF/CPUDART write that SErrored (E3a, N1h2, N1j, N1k; docs/49)
+	 * went through a posted devm_ioremap() - the mistake f93/f94 made on
+	 * the PMP (docs/75 §11 row 2, docs/84 R2).
+	 */
+	ave->cpudart = ave_devm_ioremap_np(ave->dev, rd->start, ave_dart(ave)->map_size);
+	ave->dapf = ave_devm_ioremap_np(ave->dev, rf->start, DAPF_MAP_SIZE);
+	if (!ave->cpudart || !ave->dapf) {
+		dev_err(ave->dev, "dapf: ioremap failed\n");
+		ave->cpudart = NULL;
+		ave->dapf = NULL;
+		return -ENOMEM;
+	}
+	ave->cpudart_phys = rd->start;
+	ave->dapf_phys = rf->start;
+	dev_info(ave->dev, "dapf: mapped CPUDART %pa and DAPF %pa (not requested)\n",
+		 &ave->cpudart_phys, &ave->dapf_phys);
+
+	/*
+	 * The datapath DART (0x40d030000), if the overlay attaches it
+	 * (variant=4). F4 showed the encoder's DMA translating through it -
+	 * and faulting there with NO_TTBR while the CPUDART was fine - so it
+	 * is read alongside the CPUDART from now on. Found through the
+	 * iommus phandles, never by address alone.
+	 */
+	ave->dart1 = NULL;
+	for (int i = 1; ; i++) {
+		struct of_phandle_args args;
+
+		if (of_parse_phandle_with_args(ave->dev->of_node, "iommus",
+					       "#iommu-cells", i, &args))
+			break;
+		ret = of_address_to_resource(args.np, 0, &ri);
+		of_node_put(args.np);
+		if (!ret && ri.start == ave->soc->dart1_phys) {
+			ave->dart1 = ave_devm_ioremap_np(ave->dev, ri.start, ave_dart(ave)->map_size);
+			if (ave->dart1)
+				dev_info(ave->dev, "dapf: mapped datapath DART %#llx (not requested)\n",
+					 (u64)ave->soc->dart1_phys);
+			break;
+		}
+	}
+	return 0;
+}
+
+static void ave_dart_dump_tcr(struct ave_device *ave, void __iomem *base,
+			      const char *name, unsigned int sid)
+{
+	const struct ave_dart_layout *l = ave_dart(ave);
+	u32 tcr = readl(base + DL_TCR(l, sid));
+	unsigned int i;
+
+	dev_info(ave->dev, "dapf:   %s TCR[%2u]  = %#010x%s%s%s\n", name, sid, tcr,
+		 tcr & l->tcr_translate ? " TRANSLATE" : "",
+		 tcr & l->tcr_bypass_dart ? " BYPASS_DART" : "",
+		 tcr & l->tcr_bypass_dapf ? " BYPASS_DAPF" : "");
+	for (i = 0; i < l->ttbr_count; i++) {
+		u32 t = readl(base + DL_TTBR(l, sid, i));
+
+		dev_info(ave->dev, "dapf:   %s TTBR[%2u][%u] = %#010x%s\n", name,
+			 sid, i, t, t & l->ttbr_valid ? " VALID" : "");
+	}
+}
+
+static void ave_dapf_dump_tcr(struct ave_device *ave, unsigned int sid)
+{
+	ave_dart_dump_tcr(ave, ave->cpudart, "CPUDART", sid);
+}
+
+static void ave_dapf_dump_dart(struct ave_device *ave, const char *tag)
+{
+	const struct ave_dart_layout *l = ave_dart(ave);
+	unsigned int sid;
+
+	u32 err = readl(ave->cpudart + l->error);
+	u64 eaddr = ((u64)readl(ave->cpudart + l->error_addr_hi) << 32) |
+		    readl(ave->cpudart + l->error_addr_lo);
+	u32 cfg;
+	u32 dlock;
+	unsigned int i;
+
+	dev_info(ave->dev, "dapf: [%s] CPUDART %pa (%s layout)\n", tag, &ave->cpudart_phys, l->name);
+	if (!l->t8020) {
+		/* apple-dart.c DART_T8110_ERROR: stream [27:20], code [14:0] */
+		dev_info(ave->dev, "dapf:   ERROR   = %#010x%s stream %u code %#x  addr %#llx\n",
+			 err, err & BIT(31) ? " FLAG" : "", (err >> 20) & 0xff, err & 0x7fff, eaddr);
+		for (sid = 0; sid < DART_STREAM_COUNT; sid++)
+			ave_dapf_dump_tcr(ave, sid);
+		if (ave->dart1) {
+			u32 e1 = readl(ave->dart1 + l->error);
+
+			for (sid = 0; sid < DART_STREAM_COUNT; sid++)
+				ave_dart_dump_tcr(ave, ave->dart1, "DART1", sid);
+			dev_info(ave->dev, "dapf: [%s] DART1 ERROR %#010x addr %#018llx\n", tag, e1,
+				 ((u64)readl(ave->dart1 + l->error_addr_hi) << 32) |
+				 readl(ave->dart1 + l->error_addr_lo));
+		}
+		return;
+	}
+	cfg = readl(ave->cpudart + DART_CONFIG);
+	dev_info(ave->dev, "dapf:   PARAMS1 = %#010x  PARAMS2 = %#010x\n",
+		 readl(ave->cpudart + DART_PARAMS1),
+		 readl(ave->cpudart + DART_PARAMS2));
+	dev_info(ave->dev,
+		 "dapf:   ERROR   = %#010x%s stream %u code %#x%s%s%s%s%s%s  addr %#llx\n",
+		 err, err & DART_ERR_FLAG ? " FLAG" : "", DART_ERR_STREAM(err),
+		 err & 0xfff,
+		 err & DART_ERR_NO_DAPF_MATCH ? " NO_DAPF_MATCH" : "",
+		 err & DART_ERR_WRITE ? " WRITE" : "",
+		 err & (DART_ERR_READ_FAULT | DART_ERR_WRITE_FAULT |
+			DART_ERR_PTE_READ_FAULT | DART_ERR_SUBPAGE_PROT) ? " PROT" : "",
+		 err & DART_ERR_NO_PTE ? " NO_PTE" : "",
+		 err & DART_ERR_NO_PMD ? " NO_PMD" : "",
+		 err & DART_ERR_NO_TTBR ? " NO_TTBR" : "",
+		 eaddr);
+	dev_info(ave->dev, "dapf:   CONFIG  = %#010x%s\n", cfg,
+		 cfg & DART_CONFIG_LOCK ? " LOCKED" : "");
+	for (i = 0; i < 4; i++)
+		dev_info(ave->dev, "dapf:   REMAP[%u] = %#010x\n", i,
+			 readl(ave->cpudart + DART_REMAP(i)));
+	dlock = readl(ave->cpudart + DART_DAPF_LOCK);
+	dev_info(ave->dev, "dapf:   DAPF_LOCK = %#010x%s  UNK1(0xf8) = %#010x  ENABLED_STREAMS = %#010x\n",
+		 dlock, dlock & DART_DAPF_LOCK_BIT ? " LOCKED" : "",
+		 readl(ave->cpudart + DART_UNK1),
+		 readl(ave->cpudart + DART_ENABLED_STREAMS));
+	ave_dapf_dump_tcr(ave, 0);
+	ave_dapf_dump_tcr(ave, 1);
+	if (ave->dart1) {
+		u32 e1 = readl(ave->dart1 + DART_ERROR);
+
+		dev_info(ave->dev, "dapf: [%s] datapath DART %#llx: ERROR %#010x ENABLED_STREAMS %#010x REMAP[0] %#010x\n",
+			 tag, (u64)ave->soc->dart1_phys, e1,
+			 readl(ave->dart1 + DART_ENABLED_STREAMS),
+			 readl(ave->dart1 + DART_REMAP(0)));
+		/*
+		 * Every stream, not just 0 and 1.
+		 *
+		 * ENABLED_STREAMS reads 0x0000ffff - all sixteen - and this
+		 * driver has only ever configured, restored or even LOOKED at
+		 * two of them. If the source-read DMA issues under any other
+		 * stream id, its translation was never set up, and a read
+		 * that is dropped or returns zeros looks exactly like what
+		 * F16, F17 and F18 produced: the address programmed, every
+		 * macroblock walked, and no pixels. No DART fault was logged
+		 * in any of those runs either, which is consistent with a
+		 * stream that is disabled rather than mistranslating.
+		 *
+		 * Read-only, and cheap: 16 TCRs and 64 TTBRs per DART.
+		 */
+		for (sid = 0; sid < DART_STREAM_COUNT; sid++)
+			ave_dart_dump_tcr(ave, ave->dart1, "DART1", sid);
+		dev_info(ave->dev,
+			 "dapf: [%s] DART1 ERROR %#010x addr %#018llx\n", tag, e1,
+			 ((u64)readl(ave->dart1 + DART_ERROR_ADDR_HI) << 32) |
+			 readl(ave->dart1 + DART_ERROR_ADDR_LO));
+	}
+	/* The same question for the CPUDART: which streams does it translate? */
+	for (sid = 2; sid < DART_STREAM_COUNT; sid++)
+		ave_dapf_dump_tcr(ave, sid);
+}
+
+/*
+ * Put the datapath DART's translation back after a block reset.
+ *
+ * F4 (pulse at stage 7, then Process): DART1 stream 0 faulted with NO_TTBR at
+ * the input buffer while the CPUDART still held its TTBR. F5 (cold boot, no
+ * pulse): DART1's SIDs 0 and 1 held exactly the CPUDART's TTBR and TCR, and
+ * the datapath ran without a single fault. So the pulse clears DART1's
+ * translation and leaves the CPUDART's alone (R1, R4). The page table itself
+ * is the shared domain's and is untouched; only DART1's pointers to it are
+ * gone.
+ *
+ * This copies the CPUDART's TTBR[sid][0..3] and then TCR[sid] into DART1 for
+ * every stream the CPUDART actually translates - the order apple-dart uses
+ * when it attaches a domain (TTBRs, then enable translation), and the
+ * per-instance mirroring macOS does (docs/56). Every value is read back. No
+ * TLB flush: the reset has just emptied it. Nothing is written when DART1
+ * already matches.
+ *
+ * It used to mirror a hardcoded { 0, 1 }, which was the set the overlay
+ * attached. That silently became wrong the moment the overlay attached a
+ * third: the ADT declares this device's streams as sids = 0x8001, stream 0
+ * and stream 15, and nothing had ever attached 15 (docs/69). Deriving the
+ * set from the CPUDART cannot go stale that way.
+ */
+int ave_dart_restore_datapath(struct ave_device *ave)
+{
+	unsigned int i, k, bad = 0, wrote = 0, mirrored = 0;
+	int ret;
+
+	ret = ave_dapf_check_power(ave);
+	if (ret)
+		return ret;
+	ret = ave_dapf_map(ave);
+	if (ret)
+		return ret;
+	if (!ave->dart1)
+		return -ENODEV;
+
+	/*
+	 * t8110: a block reset also clears the global stream enables, which
+	 * apple-dart sets to all-ones once at its own reset (TCR does the
+	 * isolation). Put that back first.
+	 */
+	if (!ave_dart(ave)->t8020) {
+		u32 en = readl(ave->dart1 + DART_T8110_ENABLE_STREAMS);
+
+		if (en != U32_MAX) {
+			dev_info(ave->dev, "dart: DART1 ENABLE_STREAMS %#x -> all\n", en);
+			writel(U32_MAX, ave->dart1 + DART_T8110_ENABLE_STREAMS);
+		}
+	}
+
+	for (i = 0; i < DART_STREAM_COUNT; i++) {
+		const struct ave_dart_layout *l = ave_dart(ave);
+		unsigned int sid = i;
+		u32 ctcr = readl(ave->cpudart + DL_TCR(l, sid));
+		u32 dtcr = readl(ave->dart1 + DL_TCR(l, sid));
+		bool same = ctcr == dtcr;
+
+		/*
+		 * Only streams the CPUDART translates. A stream neither DART
+		 * translates is one nothing attached, and mirroring a zero
+		 * TCR would be a no-op anyway.
+		 */
+		if (!(ctcr & l->tcr_translate) && !(dtcr & l->tcr_translate))
+			continue;
+		mirrored++;
+
+		for (k = 0; k < l->ttbr_count; k++)
+			same &= readl(ave->cpudart + DL_TTBR(l, sid, k)) ==
+				readl(ave->dart1 + DL_TTBR(l, sid, k));
+		if (same)
+			continue;
+
+		dev_info(ave->dev, "dart: restoring DART1 SID %u: TCR %#x -> %#x, TTBR[0] %#010x -> %#010x\n",
+			 sid, dtcr, ctcr, readl(ave->dart1 + DL_TTBR(l, sid, 0)),
+			 readl(ave->cpudart + DL_TTBR(l, sid, 0)));
+		for (k = 0; k < l->ttbr_count; k++)
+			writel(readl(ave->cpudart + DL_TTBR(l, sid, k)),
+			       ave->dart1 + DL_TTBR(l, sid, k));
+		writel(ctcr, ave->dart1 + DL_TCR(l, sid));
+		wrote++;
+		if (!l->t8020 && ave_dart_t8110_flush_sid(ave, ave->dart1, sid))
+			bad++;
+
+		for (k = 0; k < l->ttbr_count; k++)
+			bad += readl(ave->dart1 + DL_TTBR(l, sid, k)) !=
+			       readl(ave->cpudart + DL_TTBR(l, sid, k));
+		bad += readl(ave->dart1 + DL_TCR(l, sid)) != ctcr;
+	}
+
+	if (bad) {
+		dev_err(ave->dev, "dart: DART1 restore did not read back (%u mismatches)\n", bad);
+		return -EIO;
+	}
+	dev_info(ave->dev, "dart: DART1 %s (%u stream(s) mirrored)\n",
+		 wrote ? "translation restored from the CPUDART, read back OK"
+		       : "already matched the CPUDART; nothing written",
+		 mirrored);
+	if (!mirrored)
+		dev_warn(ave->dev,
+			 "dart: no stream translates on either DART - the datapath has no mapping at all\n");
+	return 0;
+}
+
+/*
+ * Does the datapath DART translate with the same tables as the CPUDART?
+ *
+ * macOS programs every dart-ave0 instance with one translation (docs/56), and
+ * apple-dart does the same for every DART in iommus - the CPUDART's SIDs 0 and
+ * 1 both read TTBR 0x901c0584 in F4. The encoder's DMA goes through
+ * 0x40d030000 (F4: NO_TTBR faults there at the input frame's IOVA), so if its
+ * stream-0 translation does not match the CPUDART's, starting the hardware
+ * only buys an SMMU fault storm - and F4 ended in a machine reset shortly
+ * after. Returns 0 when they match (or when there is no second DART to
+ * compare), -EIO when they do not. Reads only.
+ */
+int ave_dart_datapath_check(struct ave_device *ave, const char *tag)
+{
+	bool match;
+	u32 c_tcr, c_ttbr, d_tcr, d_ttbr;
+	int ret;
+
+	ret = ave_dapf_check_power(ave);
+	if (ret)
+		return ret;
+	ret = ave_dapf_map(ave);
+	if (ret)
+		return ret;
+	if (!ave->dart1) {
+		dev_warn(ave->dev, "dart: [%s] no datapath DART in iommus (overlay variant=4?); cannot check\n",
+			 tag);
+		return -ENODEV;
+	}
+
+	c_tcr = readl(ave->cpudart + DL_TCR(ave_dart(ave), 0));
+	c_ttbr = readl(ave->cpudart + DL_TTBR(ave_dart(ave), 0, 0));
+	d_tcr = readl(ave->dart1 + DL_TCR(ave_dart(ave), 0));
+	d_ttbr = readl(ave->dart1 + DL_TTBR(ave_dart(ave), 0, 0));
+	match = d_ttbr == c_ttbr && d_tcr == c_tcr && (d_ttbr & ave_dart(ave)->ttbr_valid);
+	/* Checked every frame; only a mismatch is news while streaming. */
+	if (!match || !ave->dart_check_quiet)
+		dev_info(ave->dev, "dart: [%s] SID0 CPUDART TCR %#x TTBR %#010x | DART1 TCR %#x TTBR %#010x -> %s\n",
+			 tag, c_tcr, c_ttbr, d_tcr, d_ttbr,
+			 match ? "MATCH" : "MISMATCH");
+	return match ? 0 : -EIO;
+}
+
+static bool ave_dapf_slot_read(struct ave_device *ave, unsigned int i,
+			       struct ave_dapf_entry *e)
+{
+	void __iomem *b = ave->dapf + DAPF_ENTRY(i);
+
+	e->r0 = readl(b + DAPF_R0);
+	e->r4 = readl(b + DAPF_R4);
+	e->start = readq(b + DAPF_START);
+	e->end = readq(b + DAPF_END);
+	e->r20 = ave->soc->dart_t8110 ? readl(b + DAPF_R20) : 0;
+	return e->r0 || e->r4 || e->start || e->end || e->r20;
+}
+
+static bool ave_dapf_covers(const struct ave_dapf_entry *e, u64 addr)
+{
+	/* start > end is uninitialised garbage (E2), not an entry. */
+	return e->r0 && e->start <= e->end && addr >= e->start && addr <= e->end;
+}
+
+static unsigned int ave_dapf_dump_entries(struct ave_device *ave, const char *tag)
+{
+	/* The addresses the questions in docs/44 E2 are about. */
+	const u64 probe_addr[] = {
+		ave->soc->iboot.text_phys + 0x200,	/* the faulting fetch */
+		ave->soc->iboot.data_literal,		/* DATA through the window */
+		ave->soc->dapf_mmio_own.start,		/* ave0 SVE */
+		ave->soc->dapf_mmio_adt.start,		/* ave1 fabric */
+	};
+	unsigned int i, j, used = 0;
+
+	dev_info(ave->dev, "dapf: [%s] DAPF %pa, %u entries x {r0 +0, r4 +4, start +8, end +0x10 (incl)}\n",
+		 tag, &ave->dapf_phys, AVE_DAPF_MAX_ENTRIES);
+	for (i = 0; i < AVE_DAPF_MAX_ENTRIES; i++) {
+		struct ave_dapf_entry e;
+		bool nz = ave_dapf_slot_read(ave, i, &e);
+		char hits[64] = "";
+
+		if (!nz) {
+			dev_info(ave->dev, "dapf:   [%2u] empty\n", i);
+			continue;
+		}
+		used++;
+		for (j = 0; j < ARRAY_SIZE(probe_addr); j++) {
+			if (ave_dapf_covers(&e, probe_addr[j])) {
+				size_t l = strlen(hits);
+
+				snprintf(hits + l, sizeof(hits) - l, " admits:%#llx",
+					 probe_addr[j]);
+			}
+		}
+		dev_info(ave->dev, "dapf:   [%2u] r0 %#06x r4 %#06x  %#013llx - %#013llx%s\n",
+			 i, e.r0, e.r4, e.start, e.end, hits);
+		if (ave->soc->dart_t8110)
+			dev_info(ave->dev, "dapf:   [%2u] r20 %#010x\n", i, e.r20);
+	}
+	dev_info(ave->dev, "dapf: [%s] %u non-empty slot(s)\n", tag, used);
+	return used;
+}
+
+/*
+ * Ungated dump, for callers that have their own reason to look. The block
+ * reset path (ave_drv.c, core_reset) uses it to answer the question that
+ * decides whether resetting the core is viable at all: the DAPF entries are
+ * written once by m1n1 at boot and Linux cannot rewrite them - a write is a
+ * fatal SError (docs/49) - so if a reset clears them, nothing after it can
+ * fetch and the only way back is a reboot.
+ */
+/*
+ * FNV-1a over every field of all 16 slots, empty ones included, plus whether
+ * any slot still admits the core's first fetch. A slot count is not enough:
+ * the unused slots on this machine hold uninitialised junk, so the count reads
+ * 16 before and after anything (r1, 2026-09-14) and could never say "no".
+ */
+static u64 ave_dapf_fingerprint(struct ave_device *ave, bool *admits_fetch)
+{
+	u64 h = 0xcbf29ce484222325ULL;
+	unsigned int i;
+
+	*admits_fetch = false;
+	for (i = 0; i < AVE_DAPF_MAX_ENTRIES; i++) {
+		struct ave_dapf_entry e = {};
+		u64 f[5];
+		unsigned int k, b;
+
+		if (ave_dapf_slot_read(ave, i, &e) &&
+		    ave_dapf_covers(&e, ave->soc->iboot.text_phys + 0x200))
+			*admits_fetch = true;
+		f[0] = e.r0; f[1] = e.r4; f[2] = e.start; f[3] = e.end; f[4] = e.r20;
+		for (k = 0; k < ARRAY_SIZE(f); k++)
+			for (b = 0; b < 64; b += 8) {
+				h ^= (f[k] >> b) & 0xff;
+				h *= 0x100000001b3ULL;
+			}
+	}
+	return h;
+}
+
+int ave_dapf_dump_now(struct ave_device *ave, const char *tag,
+		      u64 *fingerprint, bool *admits_fetch, bool darts)
+{
+	bool admits;
+	u64 fp;
+	int ret;
+
+	ret = ave_dapf_check_power(ave);
+	if (ret)
+		return ret;
+	ret = ave_dapf_map(ave);
+	if (ret)
+		return ret;
+
+	/*
+	 * @darts false: the DAPF entries only. f56 died reading the datapath
+	 * DART right after the block reset; the entries are what decides
+	 * whether a restart is safe (docs/84 §4).
+	 */
+	if (darts)
+		ave_dapf_dump_dart(ave, tag);
+	ave_dapf_dump_entries(ave, tag);
+	fp = ave_dapf_fingerprint(ave, &admits);
+	dev_info(ave->dev, "dapf: [%s] fingerprint %#018llx, TEXT fetch %s\n",
+		 tag, fp, admits ? "admitted" : "NOT ADMITTED");
+	if (fingerprint)
+		*fingerprint = fp;
+	if (admits_fetch)
+		*admits_fetch = admits;
+	return 0;
+}
+
+static bool dart_dump_close;
+module_param(dart_dump_close, bool, 0644);
+MODULE_PARM_DESC(dart_dump_close,
+		 "after each session close, log both DARTs' TCR/TTBR/ERROR (read-only; docs/90)");
+
+static bool regdump;
+module_param(regdump, bool, 0644);
+MODULE_PARM_DESC(regdump,
+		 "after each probe-time frame and session close, log every non-zero word of the SMMU and both DARTs (read-only; docs/90)");
+
+static void ave_regdump_block(struct ave_device *ave, const char *name,
+			      phys_addr_t pa, const char *tag)
+{
+	void __iomem *b;
+	unsigned int o, n = 0;
+
+	if (!pa)
+		return;
+	b = ioremap_np(pa, SZ_16K);
+	if (!b)
+		return;
+	for (o = 0; o < SZ_16K; o += 4) {
+		u32 v = readl(b + o);
+
+		if (v) {
+			dev_info(ave->dev, "regdump[%s] %s+%#06x = %#010x\n", tag, name, o, v);
+			n++;
+		}
+	}
+	dev_info(ave->dev, "regdump[%s] %s %pa: %u non-zero word(s)\n", tag, name, &pa, n);
+	iounmap(b);
+}
+
+void ave_regdump_iova(struct ave_device *ave, const char *what, dma_addr_t iova)
+{
+	struct iommu_domain *dom = iommu_get_domain_for_dev(ave->dev);
+	phys_addr_t pa;
+
+	if (!regdump || !dom)
+		return;
+	pa = iommu_iova_to_phys(dom, iova);
+	dev_info(ave->dev, "regdump: %s iova %pad -> pa %pa (16K page %#llx)\n", what, &iova, &pa,
+		 (u64)pa >> 14);
+}
+
+void ave_regdump(struct ave_device *ave, const char *tag)
+{
+	struct iommu_domain *dom = iommu_get_domain_for_dev(ave->dev);
+
+	if (!regdump)
+		return;
+	/* docs/90 §5: IOVA -> 16K page, to read the SMMU's cached entries against */
+	if (dom && !strcmp(tag, "frame")) {
+		u64 iova;
+
+		for (iova = 0xf0000000ULL; iova < 0x100000000ULL; iova += SZ_16K) {
+			phys_addr_t pa = iommu_iova_to_phys(dom, iova);
+
+			if (pa)
+				dev_info(ave->dev, "pmap %#llx %#llx\n", iova, (u64)pa >> 14);
+		}
+	}
+	ave_regdump_block(ave, "SMMU", ave->soc->smmu_phys, tag);
+	ave_regdump_block(ave, "DART1", ave->soc->dart1_phys, tag);
+	ave_regdump_block(ave, "CPUDART", ave->soc->cpudart_phys, tag);
+}
+
+/*
+ * docs/93: firmware memory snapshots for emulation. snap_hold_frame=N
+ * snap_hold_s=S holds the probe-time self-test for S seconds after frame N's
+ * result (or timeout), before anything is torn down, so the firmware's
+ * memory can be read through /sys/kernel/debug/apple_ave_dva in a known
+ * state. Reading that file at offset X returns what the encoder sees at
+ * device address X (read-only; unmapped pages read as zeros).
+ */
+static int snap_hold_frame = -1;
+module_param(snap_hold_frame, int, 0644);
+MODULE_PARM_DESC(snap_hold_frame, "probe-time self-test: hold after this frame's result (docs/93); -1 = off");
+static unsigned int snap_hold_s = 60;
+module_param(snap_hold_s, uint, 0644);
+MODULE_PARM_DESC(snap_hold_s, "seconds to hold for snap_hold_frame (docs/93)");
+static bool dva_debugfs;
+module_param(dva_debugfs, bool, 0444);
+MODULE_PARM_DESC(dva_debugfs, "create /sys/kernel/debug/apple_ave_dva: read the encoder's device address space (read-only, docs/93)");
+
+void ave_snap_hold(struct ave_device *ave, unsigned int frame)
+{
+	if (snap_hold_frame < 0 || frame != (unsigned int)snap_hold_frame)
+		return;
+	dev_info(ave->dev, "snap: holding %u s after frame %u (docs/93)\n", snap_hold_s, frame);
+	msleep(snap_hold_s * 1000);
+	dev_info(ave->dev, "snap: hold over\n");
+}
+
+static ssize_t ave_dva_read(struct file *f, char __user *ubuf, size_t len, loff_t *ppos)
+{
+	struct ave_device *ave = f->private_data;
+	struct iommu_domain *dom = iommu_get_domain_for_dev(ave->dev);
+	size_t done = 0;
+
+	if (!dom)
+		return -ENODEV;
+	while (done < len) {
+		u64 dva = *ppos;
+		size_t off = dva & (PAGE_SIZE - 1);
+		size_t n = min_t(size_t, len - done, PAGE_SIZE - off);
+		phys_addr_t pa = iommu_iova_to_phys(dom, dva);
+		void *src = NULL, *map = NULL, *vm = NULL;
+		int left;
+
+		/*
+		 * Read through an uncached mapping. The driver writes its DMA
+		 * buffers through uncached aliases and the coprocessor writes
+		 * DRAM behind the CPU caches, so the cacheable linear map can
+		 * return stale lines. RAM: a non-cacheable vmap of the page.
+		 * The firmware carve-outs are no-map memory (pfn_valid, but not
+		 * in the linear map: page_address() faults there): memremap WC.
+		 */
+		if (pa && region_intersects(pa & PAGE_MASK, PAGE_SIZE, IORESOURCE_SYSTEM_RAM,
+					    IORES_DESC_NONE) == REGION_INTERSECTS) {
+			struct page *pg = pfn_to_page(PHYS_PFN(pa));
+
+			vm = vmap(&pg, 1, VM_MAP, pgprot_writecombine(PAGE_KERNEL));
+			if (vm)
+				src = vm + offset_in_page(pa);
+		} else if (pa) {
+			map = memremap(pa & PAGE_MASK, PAGE_SIZE, MEMREMAP_WC);
+			if (map)
+				src = map + offset_in_page(pa);
+		}
+		if (src)
+			left = copy_to_user(ubuf + done, src, n);
+		else
+			left = clear_user(ubuf + done, n);
+		if (map)
+			memunmap(map);
+		if (vm)
+			vunmap(vm);
+		if (left)
+			return done ? done : -EFAULT;
+		done += n;
+		*ppos += n;
+	}
+	return done;
+}
+
+static const struct file_operations ave_dva_fops = {
+	.owner	= THIS_MODULE,
+	.open	= simple_open,
+	.read	= ave_dva_read,
+	.llseek	= default_llseek,
+};
+
+/*
+ * apple_ave_mmio: read at offset X = readl() of AP-physical address X, only
+ * inside the encoder's own register banks and 4-byte aligned. For reading
+ * back registers the firmware is known to have written (docs/93): an
+ * arbitrary read elsewhere in a bank can be an SError (docs/53 f38), so the
+ * caller chooses the addresses, not this file.
+ */
+static ssize_t ave_mmio_read(struct file *f, char __user *ubuf, size_t len, loff_t *ppos)
+{
+	struct ave_device *ave = f->private_data;
+	u64 pa = *ppos;
+	unsigned int i;
+	u32 v;
+
+	if (len < 4 || (pa & 3))
+		return -EINVAL;
+	for (i = 0; i < AVE_NUM_BANKS; i++) {
+		const struct ave_bank *b = &ave->bank[i];
+
+		if (b->base && pa >= b->phys && pa + 4 <= b->phys + b->size) {
+			v = readl(b->base + (pa - b->phys));
+			if (copy_to_user(ubuf, &v, 4))
+				return -EFAULT;
+			*ppos += 4;
+			return 4;
+		}
+	}
+	return -ERANGE;
+}
+
+static const struct file_operations ave_mmio_fops = {
+	.owner	= THIS_MODULE,
+	.open	= simple_open,
+	.read	= ave_mmio_read,
+	.llseek	= default_llseek,
+};
+
+void ave_dva_debugfs_init(struct ave_device *ave)
+{
+	if (dva_debugfs && !ave->soc->inst) {
+		ave->dva_dentry = debugfs_create_file("apple_ave_dva", 0400, NULL, ave, &ave_dva_fops);
+		ave->mmio_dentry = debugfs_create_file("apple_ave_mmio", 0400, NULL, ave, &ave_mmio_fops);
+	}
+}
+
+void ave_dva_debugfs_exit(struct ave_device *ave)
+{
+	debugfs_remove(ave->dva_dentry);
+	debugfs_remove(ave->mmio_dentry);
+	ave->dva_dentry = ave->mmio_dentry = NULL;
+}
+
+void ave_dapf_dump_on_close(struct ave_device *ave)
+{
+	ave_regdump(ave, "close");
+	if (dart_dump_close && ave->cpudart)
+		ave_dapf_dump_dart(ave, "close");
+}
+
+int ave_dapf_dump(struct ave_device *ave)
+{
+	int ret;
+
+	if (!dapf_dump)
+		return 0;
+
+	ret = ave_dapf_check_power(ave);
+	if (ret)
+		return ret;
+	ret = ave_dapf_map(ave);
+	if (ret)
+		return ret;
+
+	dev_info(ave->dev, "dapf: E2 read-only dump (domain %s)\n",
+		 iommu_get_domain_for_dev(ave->dev) ? "attached" : "none - no DART bound");
+	ave_dapf_dump_dart(ave, "E2");
+	ave_dapf_dump_entries(ave, "E2");
+	return 0;
+}
+
+/*
+ * docs/86: system sleep. Read-only capture of all 16 slots once the core is
+ * about to start (stage 8, after ave1's own programming), so resume can
+ * tell whether s2idle took the DAPF with venc_sys - which nothing has
+ * shown either way - and put back exactly what the core last ran with.
+ */
+int ave_dapf_capture(struct ave_device *ave)
+{
+	unsigned int i;
+	bool admits;
+	int ret;
+
+	BUILD_BUG_ON(AVE_DAPF_SLOTS != AVE_DAPF_MAX_ENTRIES);
+	ave->dapf_boot_valid = false;
+	ret = ave_dapf_check_power(ave);
+	if (ret)
+		return ret;
+	ret = ave_dapf_map(ave);
+	if (ret)
+		return ret;
+	for (i = 0; i < AVE_DAPF_MAX_ENTRIES; i++) {
+		struct ave_dapf_entry e = {};
+
+		ave_dapf_slot_read(ave, i, &e);
+		ave->dapf_boot[i] = (struct ave_dapf_slot){
+			.r0 = e.r0, .r4 = e.r4, .start = e.start, .end = e.end,
+		};
+	}
+	ave->dapf_boot_fp = ave_dapf_fingerprint(ave, &admits);
+	ave->dapf_boot_valid = true;
+	dev_info(ave->dev, "pm: DAPF captured for resume: fingerprint %#018llx, TEXT fetch %s\n",
+		 ave->dapf_boot_fp, admits ? "admitted" : "NOT ADMITTED");
+	return 0;
+}
+
+/*
+ * docs/86: after resume, before the core is reset or started. Read-only
+ * when the DAPF survived (the expected case: it survived Linux's boot-time
+ * gating of venc_sys, docs/50). Otherwise put back what probe captured,
+ * non-posted, in m1n1's order (r4, start, end, r0 last) - the sequence R2
+ * showed Linux can write (docs/84 §3) - or, for an instance whose DAPF the
+ * driver owns, program it the way probe does. Either must read back to the
+ * probe-time fingerprint, or the core is not started.
+ */
+int ave_dapf_pm_restore(struct ave_device *ave)
+{
+	unsigned int i;
+	bool admits;
+	u64 fp;
+	int ret;
+
+	if (!ave->dapf_boot_valid)
+		return -ENODATA;
+	ret = ave_dapf_check_power(ave);
+	if (ret)
+		return ret;
+	ret = ave_dapf_map(ave);
+	if (ret)
+		return ret;
+
+	fp = ave_dapf_fingerprint(ave, &admits);
+	if (fp == ave->dapf_boot_fp) {
+		dev_info(ave->dev, "pm: resume: DAPF fingerprint %#018llx SURVIVED the sleep, TEXT fetch %s; nothing written\n",
+			 fp, admits ? "admitted" : "NOT ADMITTED");
+		return 0;
+	}
+	dev_warn(ave->dev, "pm: resume: DAPF fingerprint %#018llx, was %#018llx at probe: CHANGED across the sleep (TEXT fetch %s); writing it back\n",
+		 fp, ave->dapf_boot_fp, admits ? "admitted" : "NOT ADMITTED");
+	ave_dapf_dump_entries(ave, "resume, before restore");
+
+	/* t8020 DAPF_LOCK; the t8110 DART has no such register at 0xf0 */
+	if (ave_dart(ave)->t8020 &&
+	    readl(ave->cpudart + DART_DAPF_LOCK) & DART_DAPF_LOCK_BIT) {
+		dev_err(ave->dev, "pm: resume: DAPF_LOCK is set; cannot restore the DAPF\n");
+		return -EPERM;
+	}
+
+	if (ave->soc->dapf_by_driver) {
+		ret = ave_dapf_program_instance(ave);
+		if (ret)
+			return ret;
+	} else {
+		ave_step(ave, "pm: resume: first DAPF write (slot 0 r4, captured values)");
+		for (i = 0; i < AVE_DAPF_MAX_ENTRIES; i++) {
+			void __iomem *b = ave->dapf + DAPF_ENTRY(i);
+			const struct ave_dapf_slot *c = &ave->dapf_boot[i];
+
+			writel(c->r4, b + DAPF_R4);
+			writeq(c->start, b + DAPF_START);
+			writeq(c->end, b + DAPF_END);
+			writel(c->r0, b + DAPF_R0);
+		}
+	}
+
+	fp = ave_dapf_fingerprint(ave, &admits);
+	ave_dapf_dump_entries(ave, "resume, after restore");
+	if (fp != ave->dapf_boot_fp || !admits) {
+		dev_err(ave->dev, "pm: resume: DAPF restore read back %#018llx (want %#018llx), TEXT fetch %s; not starting the core\n",
+			fp, ave->dapf_boot_fp, admits ? "admitted" : "NOT ADMITTED");
+		return -EIO;
+	}
+	dev_info(ave->dev, "pm: resume: DAPF restored from Linux and read back: fingerprint %#018llx\n",
+		 fp);
+	return 0;
+}
+
+/*
+ * docs/84 R2: write every slot back with exactly what it holds, in m1n1's
+ * order (r4, start, end, r0 last), then read it back. No entry changes, so
+ * the core's fetches are unaffected; the only question is whether a write
+ * from Linux survives.
+ */
+static int ave_dapf_rewrite_same(struct ave_device *ave)
+{
+	struct ave_dapf_entry cur[AVE_DAPF_MAX_ENTRIES], back;
+	unsigned int i, bad = 0;
+	int ret;
+
+	ret = ave_dapf_check_power(ave);
+	if (ret)
+		return ret;
+	ret = ave_dapf_map(ave);
+	if (ret)
+		return ret;
+	for (i = 0; i < AVE_DAPF_MAX_ENTRIES; i++)
+		ave_dapf_slot_read(ave, i, &cur[i]);
+	ave_step(ave, "dapf same: first non-posted write, slot 0 r4 (docs/84 R2)");
+	for (i = 0; i < AVE_DAPF_MAX_ENTRIES; i++) {
+		void __iomem *b = ave->dapf + DAPF_ENTRY(i);
+
+		writel(cur[i].r4, b + DAPF_R4);
+		writeq(cur[i].start, b + DAPF_START);
+		writeq(cur[i].end, b + DAPF_END);
+		writel(cur[i].r0, b + DAPF_R0);
+		if (!i)
+			ave_step(ave, "dapf same: slot 0 written and alive");
+	}
+	for (i = 0; i < AVE_DAPF_MAX_ENTRIES; i++) {
+		ave_dapf_slot_read(ave, i, &back);
+		if (back.r0 != cur[i].r0 || back.r4 != cur[i].r4 ||
+		    back.start != cur[i].start || back.end != cur[i].end)
+			bad++;
+	}
+	dev_info(ave->dev, "dapf same: %u slots written back non-posted, %u read back different\n",
+		 AVE_DAPF_MAX_ENTRIES, bad);
+	return bad ? -EIO : 0;
+}
+
+/*
+ * docs/84 R2b: does a Linux write CHANGE a slot? Clear slot 15 - unused
+ * uninitialised garbage on this machine, outside m1n1's entries 0..2 - to
+ * a disabled all-zero entry and read it back.
+ */
+static int ave_dapf_probe_slot15(struct ave_device *ave)
+{
+	struct ave_dapf_entry before, after;
+	void __iomem *b;
+	int ret;
+
+	ret = ave_dapf_check_power(ave);
+	if (ret)
+		return ret;
+	ret = ave_dapf_map(ave);
+	if (ret)
+		return ret;
+	b = ave->dapf + DAPF_ENTRY(AVE_DAPF_MAX_ENTRIES - 1);
+	ave_dapf_slot_read(ave, AVE_DAPF_MAX_ENTRIES - 1, &before);
+	ave_step(ave, "dapf probe: clearing slot 15 (docs/84 R2b)");
+	writel(0, b + DAPF_R0);		/* disable first, then the range */
+	writel(0, b + DAPF_R4);
+	writeq(0, b + DAPF_START);
+	writeq(0, b + DAPF_END);
+	ave_dapf_slot_read(ave, AVE_DAPF_MAX_ENTRIES - 1, &after);
+	dev_info(ave->dev,
+		 "dapf probe: slot 15 r0 %#x r4 %#x %#llx-%#llx -> r0 %#x r4 %#x %#llx-%#llx: %s\n",
+		 before.r0, before.r4, before.start, before.end,
+		 after.r0, after.r4, after.start, after.end,
+		 !after.r0 && !after.r4 && !after.start && !after.end ?
+		 "WRITES TAKE EFFECT" : "the write did not stick");
+	return 0;
+}
+
+/*
+ * docs/82, docs/84 §3: for a DART m1n1 leaves alone (ave1), the driver
+ * writes what m1n1 writes for ave0 - iBoot's TEXT (r0 0x11), the 0x1f0
+ * window (0x33) and the ADT's MMIO entry (0x31) - and clears the other
+ * slots of their power-on garbage. Non-posted, before the core starts.
+ */
+int ave_dapf_program_instance(struct ave_device *ave)
+{
+	const struct ave_soc *soc = ave->soc;
+	struct ave_dapf_entry ent[AVE_DAPF_MAX_ENTRIES] = {
+		{ .start = soc->iboot.text_phys,
+		  .end = soc->iboot.text_phys + soc->iboot.text_size - 4,
+		  .r0 = 0x11, .r4 = 1, .what = "iBoot TEXT" },
+		{ .start = soc->dapf_window.start, .end = soc->dapf_window.end,
+		  .r0 = 0x33, .r4 = 1, .what = "DVA window" },
+	};
+
+	if (!soc->dapf_by_driver || !soc->iboot.text_phys)
+		return 0;
+	/*
+	 * The ADT's MMIO entry, where the SoC has one (t600x). t8103's
+	 * dart-ave lists only the window; an all-zero range would otherwise
+	 * be written as an enabled entry at address 0. Unused slots stay
+	 * zero, i.e. cleared.
+	 */
+	if (soc->dapf_mmio_adt.end)
+		ent[2] = (struct ave_dapf_entry){
+			.start = soc->dapf_mmio_adt.start, .end = soc->dapf_mmio_adt.end,
+			.r0 = 0x31, .r4 = 1, .what = "ADT MMIO" };
+	dev_info(ave->dev, "dapf: programming %s's DAPF (m1n1 does not)\n", soc->name);
+	return ave_dapf_program(ave, ent, AVE_DAPF_MAX_ENTRIES, false);
+}
+
+int ave_dapf_program(struct ave_device *ave,
+		     const struct ave_dapf_entry *ent, unsigned int n,
+		     bool preclear)
+{
+	unsigned int i;
+	int ret, bad = 0;
+
+	if (!n || n > AVE_DAPF_MAX_ENTRIES)
+		return -EINVAL;
+	ret = ave_dapf_check_power(ave);
+	if (ret)
+		return ret;
+	ret = ave_dapf_map(ave);
+	if (ret)
+		return ret;
+
+	for (i = 0; i < n; i++) {
+		if (ent[i].start > ent[i].end) {
+			dev_err(ave->dev, "dapf: entry %u start %#llx > end %#llx\n",
+				i, ent[i].start, ent[i].end);
+			return -EINVAL;
+		}
+	}
+
+	if (readl(ave->cpudart + DART_DAPF_LOCK) & DART_DAPF_LOCK_BIT) {
+		dev_err(ave->dev, "dapf: REFUSING - DAPF_LOCK is set; writes would be ignored\n");
+		return -EPERM;
+	}
+
+	/*
+	 * m1n1's dapf_init_t8020() order: r4, start, end, r0 last. With
+	 * @preclear (dapf_order=clear16 only) every slot is first disabled with
+	 * r0 = 0 - which is the write that reset the machine on 2026-09-13
+	 * (docs/48, docs/49), so it is no longer the default.
+	 *
+	 * Original rationale for the pre-clear:
+	 * E2 found non-zero garbage r0 in the slots E3 enables, and m1n1's
+	 * order alone would leave that garbage enable in place while the range
+	 * is half-written. The core is halted during this, but the r0 bits are
+	 * not understood, so no slot passes through an unintended state.
+	 */
+	for (i = 0; i < n; i++) {
+		void __iomem *b = ave->dapf + DAPF_ENTRY(i);
+
+		if (i <= 1)
+			ave_step(ave, "next: first write to DAPF slot %u (%s)", i,
+				 preclear ? "r0 = 0 pre-clear" : "r4, m1n1 order");
+
+		dev_info(ave->dev, "dapf: write [%2u] r0 %#06x r4 %#06x  %#013llx - %#013llx  %s\n",
+			 i, ent[i].r0, ent[i].r4, ent[i].start, ent[i].end,
+			 ent[i].what ?: "");
+		if (preclear)
+			writel(0, b + DAPF_R0);
+		if (ent[i].end & 3)
+			dev_warn(ave->dev, "dapf: [%2u] end %#llx has low bits set; the register will drop them\n",
+				 i, ent[i].end);
+		writel(ent[i].r4, b + DAPF_R4);
+		writeq(ent[i].start, b + DAPF_START);
+		writeq(ent[i].end, b + DAPF_END);
+		writel(ent[i].r0, b + DAPF_R0);
+		/* m1n1 dapf_init_t8110a order: r20 after r0 */
+		if (ave->soc->dart_t8110)
+			writel(ent[i].r20, b + DAPF_R20);
+	}
+
+	ave_step(ave, "all %u DAPF slots written; next: readback", n);
+	for (i = 0; i < n; i++) {
+		struct ave_dapf_entry back;
+		bool ok;
+
+		ave_dapf_slot_read(ave, i, &back);
+		ok = back.r0 == ent[i].r0 && back.r4 == ent[i].r4 &&
+		     back.start == ent[i].start && back.end == ent[i].end &&
+		     back.r20 == ent[i].r20;
+		if (!ok) {
+			bad++;
+			dev_err(ave->dev,
+				"dapf: readback [%2u] MISMATCH: r0 %#x r4 %#x %#llx - %#llx\n",
+				i, back.r0, back.r4, back.start, back.end);
+		}
+	}
+	if (bad) {
+		dev_err(ave->dev, "dapf: %d of %u entries did not read back\n", bad, n);
+		return -EIO;
+	}
+	ave->dapf_programmed = true;
+	dev_info(ave->dev, "dapf: %u entries programmed and verified by readback\n", n);
+	return 0;
+}
+
+bool ave_dapf_program_requested(void)
+{
+	/* same/probe touch no admitting entry: no TEXT policy (docs/84 R2) */
+	return dapf_set && *dapf_set && !sysfs_streq(dapf_set, "off") &&
+	       !sysfs_streq(dapf_set, "same") && !sysfs_streq(dapf_set, "probe");
+}
+
+/*
+ * N1b (docs/49): does the reset follow our write, or something earlier?
+ *
+ * Two resets each came ~3 s after the pre-start scratch writes and right after
+ * a marker hold, so the write and the delay are confounded. This holds with no
+ * writes at all, logging every 2 s, then performs the most innocuous write
+ * possible - TCR[0] rewritten with the value it already has - and holds again.
+ * Every line is picked up by the fsync-per-line capture.
+ */
+int ave_dapf_write_probe(struct ave_device *ave)
+{
+	unsigned int t;
+	u32 v, back;
+	int ret;
+
+	if (!dapf_probe)
+		return 0;
+	if (!ave_dart(ave)->t8020) {
+		dev_err(ave->dev, "dapf_probe: REFUSING - TCR[0] at the t8020 offset; this DART is %s\n",
+			ave_dart(ave)->name);
+		return -EINVAL;
+	}
+	ret = ave_dapf_check_power(ave);
+	if (ret)
+		return ret;
+	ret = ave_dapf_map(ave);
+	if (ret)
+		return ret;
+
+	if (dapf_probe == 3) {
+		/* N1f: N1b's read loop without the write, for 120 s. */
+		for (t = 0; t <= 120; t += 2) {
+			dev_info(ave->dev, "PROBE N1f read loop: t=%us TCR[0]=%#x ENABLED_STREAMS=%#x\n",
+				 t, readl(ave->cpudart + DART_TCR(0)),
+				 readl(ave->cpudart + DART_ENABLED_STREAMS));
+			msleep(2000);
+		}
+		dev_info(ave->dev, "PROBE N1f survived 120 s of late DART reads\n");
+		return 0;
+	}
+
+	if (dapf_probe == 2) {
+		/* N1e: same hold inside probe, but no register access at all. */
+		for (t = 0; t <= 30; t += 2) {
+			dev_info(ave->dev, "PROBE hold, NO register access: t=%us\n", t);
+			msleep(2000);
+		}
+		dev_info(ave->dev, "PROBE N1e hold complete; returning to probe\n");
+		return 0;
+	}
+
+	for (t = 0; t <= 30; t += 2) {
+		dev_info(ave->dev, "PROBE hold, no DART writes: t=%us TCR[0]=%#x ENABLED_STREAMS=%#x\n",
+			 t, readl(ave->cpudart + DART_TCR(0)),
+			 readl(ave->cpudart + DART_ENABLED_STREAMS));
+		msleep(2000);
+	}
+
+	v = readl(ave->cpudart + DART_TCR(0));
+	if (dapf_probe == 4) {
+		/*
+		 * N1i: 60 s between the announcement and the write, printing
+		 * every 2 s with no register access (N1e: such holds are
+		 * safe), so there is no doubt the lines reach disk before the
+		 * write happens.
+		 */
+		dev_info(ave->dev, "PROBE N1i next: same-value write TCR[0] <- %#x after a 60 s no-access wait\n", v);
+		for (t = 0; t <= 60; t += 2) {
+			dev_info(ave->dev, "PROBE N1i pre-write wait, no register access: t=%us\n", t);
+			msleep(2000);
+		}
+		dev_info(ave->dev, "PROBE N1i writing TCR[0] now\n");
+		msleep(3000);
+		writel(v, ave->cpudart + DART_TCR(0));
+		dev_info(ave->dev, "PROBE N1i wrote TCR[0]; readback %#x\n",
+			 readl(ave->cpudart + DART_TCR(0)));
+		for (t = 0; t <= 20; t += 2) {
+			dev_info(ave->dev, "PROBE N1i hold after write: t=%us\n", t);
+			msleep(2000);
+		}
+		dev_info(ave->dev, "PROBE N1i survived the write\n");
+		return 0;
+	}
+	dev_info(ave->dev, "PROBE next: same-value write TCR[0] <- %#x (in 5 s)\n", v);
+	/*
+	 * 5 s, not 2: a fabric hang blocks NVMe MMIO too, so the capture's
+	 * fsync of the line printed just before a hang never lands. Give this
+	 * line ample time to reach disk before the write (N1h, docs/49).
+	 */
+	msleep(5000);
+	writel(v, ave->cpudart + DART_TCR(0));
+	back = readl(ave->cpudart + DART_TCR(0));
+	dev_info(ave->dev, "PROBE wrote TCR[0] same value; readback %#x\n", back);
+
+	for (t = 0; t <= 10; t += 2) {
+		dev_info(ave->dev, "PROBE hold after write: t=%us\n", t);
+		msleep(2000);
+	}
+	dev_info(ave->dev, "PROBE survived: a same-value TCR write is harmless; the value matters\n");
+	return 0;
+}
+
+int ave_dapf_program_selected(struct ave_device *ave)
+{
+	struct ave_dapf_entry set[AVE_DAPF_MAX_ENTRIES];
+	struct iommu_domain *domain;
+	bool want_text, mmio_ave0, mmio_adt;
+	unsigned int n = 0, nwrite, i, stale = 0;
+	bool clear16 = false;
+	u32 saved_tcr[16], saved_en = 0;
+	u32 tcr;
+	int ret;
+
+	if (!dapf_set || !*dapf_set || sysfs_streq(dapf_set, "off"))
+		return 0;
+	if (ave->dapf_programmed) {
+		dev_info(ave->dev, "dapf: already programmed this probe; skipping\n");
+		return 0;
+	}
+
+	/* docs/84 R2: can Linux write this DAPF at all, non-posted? */
+	if (sysfs_streq(dapf_set, "same"))
+		return ave_dapf_rewrite_same(ave);
+	if (sysfs_streq(dapf_set, "probe"))
+		return ave_dapf_probe_slot15(ave);
+	if (sysfs_streq(dapf_set, "control"))
+		want_text = false;
+	else if (sysfs_streq(dapf_set, "text"))
+		want_text = true;
+	else {
+		dev_err(ave->dev, "dapf: unknown dapf_set=\"%s\" (off|control|text)\n",
+			dapf_set);
+		return -EINVAL;
+	}
+
+	if (sysfs_streq(dapf_mmio, "ave0")) {
+		mmio_ave0 = true;  mmio_adt = false;
+	} else if (sysfs_streq(dapf_mmio, "adt")) {
+		mmio_ave0 = false; mmio_adt = true;
+	} else if (sysfs_streq(dapf_mmio, "both")) {
+		mmio_ave0 = true;  mmio_adt = true;
+	} else if (sysfs_streq(dapf_mmio, "none")) {
+		mmio_ave0 = false; mmio_adt = false;
+	} else {
+		dev_err(ave->dev, "dapf: unknown dapf_mmio=\"%s\" (ave0|adt|both|none)\n",
+			dapf_mmio);
+		return -EINVAL;
+	}
+
+	/*
+	 * E3 is defined as "keep translation, let the DAPF be the backstop".
+	 * Without a paging domain either no DART is bound (variant=2: TCR is
+	 * whatever gating left, nobody handles faults) or the DART is in
+	 * bypass, which skips the DAPF entirely.
+	 */
+	domain = iommu_get_domain_for_dev(ave->dev);
+	if (!domain || !(domain->type & __IOMMU_DOMAIN_PAGING)) {
+		dev_err(ave->dev,
+			"dapf: REFUSING dapf_set=%s - needs a translating DART domain (overlay variant=3, group type DMA)\n",
+			dapf_set);
+		return -EINVAL;
+	}
+
+	ret = ave_dapf_check_power(ave);
+	if (ret)
+		return ret;
+	ret = ave_dapf_map(ave);
+	if (ret)
+		return ret;
+
+	tcr = readl(ave->cpudart + DART_TCR(0));
+	if ((tcr & (DART_TCR_BYPASS_DAPF | DART_TCR_BYPASS_DART)) ||
+	    !(tcr & DART_TCR_TRANSLATE)) {
+		dev_err(ave->dev,
+			"dapf: REFUSING - TCR[0] = %#x; stream 0 is not translating with the DAPF enforced\n",
+			tcr);
+		return -EINVAL;
+	}
+
+	ave_dapf_dump_dart(ave, "E3 before");
+	ave_dapf_dump_entries(ave, "E3 before");
+
+	/*
+	 * The spelling is the interlock: the old sequence reset the machine,
+	 * so it can only be selected by a name that says so.
+	 */
+	if (sysfs_streq(dapf_order, "clear16-resets-machine")) {
+		clear16 = true;
+	} else if (!sysfs_streq(dapf_order, "m1n1")) {
+		dev_err(ave->dev, "dapf: unknown dapf_order=\"%s\" (m1n1|clear16-resets-machine)\n", dapf_order);
+		return -EINVAL;
+	}
+
+	if (clear16) {
+		/*
+		 * All 16 slots, ISP-like layout: slot 0 TEXT or cleared, slot 1
+		 * window, then MMIO, rest cleared. A clean negative control, but
+		 * this sequence reset the machine on its first write.
+		 */
+		for (i = 0; i < AVE_DAPF_MAX_ENTRIES; i++)
+			set[i] = ave_dapf_cleared;
+		set[0] = want_text ? ave_dapf_text(ave) : ave_dapf_cleared;
+		n = 1;
+		set[n++] = ave_dapf_window(ave);
+		if (mmio_ave0)
+			set[n++] = ave_dapf_mmio_ave0(ave);
+		if (mmio_adt)
+			set[n++] = ave_dapf_mmio_adt(ave);
+		nwrite = AVE_DAPF_MAX_ENTRIES;
+	} else {
+		/*
+		 * docs/49 N1: exactly what m1n1's dapf_init_t8020() would write
+		 * from an ADT listing these entries - ADT order from slot 0, only
+		 * as many slots as entries, nothing else touched. TEXT goes last.
+		 *
+		 * CAVEAT: slots beyond n keep E2's uninitialised contents, so a
+		 * dapf_set=control run in this mode is NOT a clean negative
+		 * control. Use it to learn whether the writes are survivable.
+		 */
+		set[n++] = ave_dapf_window(ave);
+		if (mmio_ave0)
+			set[n++] = ave_dapf_mmio_ave0(ave);
+		if (mmio_adt)
+			set[n++] = ave_dapf_mmio_adt(ave);
+		if (want_text)
+			set[n++] = ave_dapf_text(ave);
+		nwrite = n;
+		for (i = n; i < AVE_DAPF_MAX_ENTRIES; i++) {
+			struct ave_dapf_entry e;
+
+			if (ave_dapf_slot_read(ave, i, &e))
+				stale++;
+		}
+		if (stale)
+			dev_warn(ave->dev, "dapf: m1n1 order leaves %u non-empty slot(s) beyond %u untouched\n",
+				 stale, n);
+	}
+
+	dev_info(ave->dev, "dapf: E3 dapf_set=%s dapf_mmio=%s dapf_order=%s quiesce=%d: %u entries%s\n",
+		 dapf_set, dapf_mmio, dapf_order, dapf_quiesce, n,
+		 want_text ? "" : clear16 ?
+		 "  (NEGATIVE CONTROL: no TEXT entry - must still fault NO_DAPF_MATCH at TEXT+0x200)" :
+		 "  (no TEXT entry; NOT a clean control in m1n1 order - garbage slots remain)");
+
+	/*
+	 * docs/49 N1: every known-good DAPF write (m1n1 at boot, m1n1's AOP
+	 * experiment) happens before the DART is configured. apple-dart has
+	 * enabled translation and all streams by now, so make the DART look
+	 * like that around the writes, and put it back afterwards. The core is
+	 * halted, so nothing is using the DART meanwhile; TTBRs are untouched,
+	 * so no TLB invalidation is needed on restore.
+	 */
+	if (dapf_quiesce) {
+		for (i = 0; i < 16; i++)
+			saved_tcr[i] = readl(ave->cpudart + DART_TCR(i));
+		saved_en = readl(ave->cpudart + DART_ENABLED_STREAMS);
+		ave_step(ave, "next: quiesce DART - all TCRs 0 (saved TCR[0] %#x)", saved_tcr[0]);
+		for (i = 0; i < 16; i++)
+			writel(0, ave->cpudart + DART_TCR(i));
+		ave_step(ave, "next: ENABLED_STREAMS 0 (saved %#x)", saved_en);
+		writel(0, ave->cpudart + DART_ENABLED_STREAMS);
+		ave_step(ave, "DART quiesced");
+	}
+
+	ret = ave_dapf_program(ave, set, nwrite, clear16);
+
+	if (dapf_quiesce) {
+		ave_step(ave, "next: restore ENABLED_STREAMS %#x and TCRs", saved_en);
+		writel(saved_en, ave->cpudart + DART_ENABLED_STREAMS);
+		for (i = 0; i < 16; i++)
+			writel(saved_tcr[i], ave->cpudart + DART_TCR(i));
+		dev_info(ave->dev, "dapf: DART restored: TCR[0] %#x ENABLED_STREAMS %#x\n",
+			 readl(ave->cpudart + DART_TCR(0)),
+			 readl(ave->cpudart + DART_ENABLED_STREAMS));
+	}
+	if (ret)
+		return ret;
+
+	ave_dapf_dump_entries(ave, "E3 after");
+	if (!ave->iboot_data_mapped)
+		dev_warn(ave->dev,
+			 "dapf: DATA is not DART-mapped (fw_map_data=0); expect faults at 0x1f0000ecxxx / DVA 0xecxxx once TEXT is admitted\n");
+	return 0;
+}

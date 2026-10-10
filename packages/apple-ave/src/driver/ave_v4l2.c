@@ -1,0 +1,1740 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * V4L2 stateful mem2mem H.264 and HEVC encoder front end (docs/68, docs/77
+ * §19).
+ *
+ * NV12 in on the OUTPUT queue, H.264 or HEVC Annex-B out on the CAPTURE
+ * queue; the CAPTURE format picks the codec, which the session starts at
+ * STREAMON. HEVC is offered only when the firmware ABI has its layouts
+ * (13.5). Single-planar, MMAP (and DMABUF, which costs nothing here). One stream
+ * owns the hardware at a time: a second context gets -EBUSY from
+ * start_streaming, never from open() (docs/68 §7 step 5). On a SoC with
+ * several encoders, open() binds the context to an idle one if the node's
+ * own is taken (open_balance, docs/98 §12).
+ *
+ * The session layer (ave_session.c, ave_enc_*) does the firmware work and
+ * is synchronous - one Process in flight - so device_run() hands the job to
+ * a work item that may sleep on the reply.
+ *
+ * B frames (docs/81 "V4L2 implementation"): with VIDEO_B_FRAMES > 0 a job
+ * may hold its OUTPUT buffer, still in the m2m ready queue, until the
+ * buffer that will be its anchor arrives; then the held buffers and the
+ * anchor go to the firmware as one batch in display order, and the CAPTURE
+ * buffers come back in decode order, each with its own source's timestamp.
+ * ave_gop.h plans it. With B_FRAMES 0 nothing here changes.
+ *
+ * Format policy, from docs/68 §3.3: width a multiple of 64 and height a
+ * multiple of 16. The hardware needs a 64-byte stride and fetches
+ * 16*ceil(H/16) rows with chroma right after them; ffmpeg packs planes at
+ * its own linesize and puts chroma at stride * the height we report, so
+ * any other size gives a silently wrong picture with ffmpeg.
+ */
+#include <linux/list.h>
+#include <linux/module.h>
+#include <linux/mutex.h>
+#include <linux/slab.h>
+#include <linux/workqueue.h>
+#include <media/v4l2-ctrls.h>
+#include <media/v4l2-device.h>
+#include <media/v4l2-event.h>
+#include <media/v4l2-ioctl.h>
+#include <media/v4l2-mem2mem.h>
+#include <media/videobuf2-dma-contig.h>
+
+#include "ave.h"
+#include "ave_gop.h"
+#include "ave_session.h"
+#include "ave_v4l2.h"
+
+#define AVE_V4L2_NAME		"apple-ave"
+#define AVE_MIN_W		192
+#define AVE_MIN_H		96
+#define AVE_MAX_W		4096
+#define AVE_MAX_H		4096
+#define AVE_DEF_W		1280
+#define AVE_DEF_H		720
+#define AVE_CODED_SLOTS		4
+#define AVE_DEF_QP		30
+
+/*
+ * Wire 0xFF48 is ui32AverageNonDroppableFrameRate, not a frame-rate divisor
+ * (docs/76 §3). Sending 1 (the default here, and every run to date) makes the
+ * controller treat 29 of 30 frames as droppable and add a QP offset of up to
+ * 4 to them; macOS leaves it unset, which the firmware treats as "equal to
+ * the frame rate". f82/f83: at a target below the content's floor, 1 lets QP
+ * reach 51 while the macOS value stalls at 46. rc_nondrop=1 sends the frame
+ * rate, for comparison at achievable rates.
+ */
+static bool rc_nondrop;
+module_param(rc_nondrop, bool, 0444);
+MODULE_PARM_DESC(rc_nondrop, "send the frame rate as the non-droppable frame rate (wire 0xFF48; macOS-equivalent) instead of 1");
+
+/*
+ * A test aid for docs/81's forced-key-frame run: v4l2-ctl cannot set
+ * FORCE_KEY_FRAME in the middle of a stream, so this does it for every Nth
+ * OUTPUT buffer (display index). B-frame streams only; 0 = off.
+ */
+static unsigned int v4l2_test_key_every;
+module_param(v4l2_test_key_every, uint, 0644);
+MODULE_PARM_DESC(v4l2_test_key_every,
+		 "test aid, B-frame streams only: act as if FORCE_KEY_FRAME were set for every Nth OUTPUT buffer (0 = off; docs/81)");
+
+/*
+ * docs/98 §12: on a SoC with several encoders (t6001: 2, t6002: 4) each node
+ * drives one encoder, and an encoder runs one stream. ffmpeg and GStreamer
+ * pick the node themselves and all pick the same one, so open() picks the
+ * encoder: the node's own if no context is bound to it, else the idle
+ * compatible encoder with the lowest index, else the node's own as before
+ * (STREAMON then fails with -EBUSY, as without this).
+ */
+static bool open_balance = true;
+module_param(open_balance, bool, 0444);
+MODULE_PARM_DESC(open_balance,
+		 "an open of a node whose encoder is busy uses an idle compatible encoder of the same SoC (docs/98 §12)");
+
+/*
+ * Every registered encoder, and every ave_v4l2's ctxs and users. A leaf
+ * lock: nothing is taken under it but ave_schedule_recover()'s allocation
+ * and work queueing.
+ */
+static DEFINE_MUTEX(ave_v4l2_list_lock);
+static LIST_HEAD(ave_v4l2_list);
+
+/*
+ * One encoder and its node. Since docs/98 §12 a file opened on this node may
+ * be bound to another encoder: the node half (vfd, dev_mutex) serves the
+ * files opened here, the encoder half (m2m_dev, hw_mutex, wq, owner, the
+ * DMA device) the contexts bound here, wherever they were opened.
+ */
+struct ave_v4l2 {
+	struct ave_device	*ave;
+	struct v4l2_device	v4l2_dev;
+	struct video_device	vfd;
+	struct v4l2_m2m_dev	*m2m_dev;
+	/* vfd lock, and the queue lock of every file opened on this node */
+	struct mutex		dev_mutex;
+	struct mutex		hw_mutex;	/* ave_enc_* calls */
+	struct workqueue_struct	*wq;
+	struct ave_ctx		*owner;		/* the context holding a session */
+	struct list_head	list;		/* on ave_v4l2_list while registered */
+	/*
+	 * Under ave_v4l2_list_lock. ctxs: contexts bound to this encoder (what
+	 * open_balance looks at). users: those plus the files open on this
+	 * node, wherever they are bound (docs/84 §5): the re-probe after a
+	 * hang, which frees this structure, waits for it to reach 0.
+	 */
+	unsigned int		ctxs;
+	unsigned int		users;
+	bool			hevc;		/* HEVC offered (ave_enc_hevc_supported) */
+	bool			two_refs;	/* B frames, 2 refs (ave_enc_two_refs_supported) */
+	bool			h264_two_refs;	/* the same for H.264 (docs/89 §9) */
+};
+
+struct ave_ctx {
+	struct v4l2_fh		fh;
+	/*
+	 * av: the encoder this context is bound to - everything that reaches
+	 * the hardware, the m2m scheduler, the control ranges, the buffers'
+	 * DMA device. nav: the node it was opened on - the vfd, the lock its
+	 * ioctls and queues run under, QUERYCAP. The same unless open_balance
+	 * moved it (docs/98 §12).
+	 */
+	struct ave_v4l2		*av;
+	struct ave_v4l2		*nav;
+	struct v4l2_ctrl_handler hdl;
+	struct work_struct	run_work;
+	u32			width, height;	/* OUTPUT, as negotiated */
+	/*
+	 * OUTPUT crop: the picture actually encoded. Left/top are 0; the
+	 * MB-aligned remainder goes out as SPS frame cropping, so 1920x1080
+	 * is a 1920x1088 buffer with a 1920x1080 crop.
+	 */
+	struct v4l2_rect	crop;
+	u32			bytesperline;
+	u32			out_size, cap_size;
+	struct v4l2_fract	timeperframe;
+	/* The application's colorimetry: set on OUTPUT, echoed on CAPTURE. */
+	u32			colorspace, ycbcr_enc, quantization, xfer_func;
+	u32			qp, qp_p, qp_b;	/* P/B: 0 = qp */
+	u32			profile_idc;	/* 66, 77 or 100 */
+	u32			level_idc;
+	bool			cabac;
+	u32			bitrate;
+	bool			rc_enable;
+	u32			bitrate_mode;
+	u32			qp_min, qp_max;
+	u32			gop;
+	bool			force_key;
+	/*
+	 * docs/81: VIDEO_B_FRAMES and REF_NUMBER_FOR_PFRAMES as set, and
+	 * MIN_BUFFERS_FOR_OUTPUT, which follows B_FRAMES. nb is B_FRAMES as
+	 * latched at STREAMON (0 = the one-frame path); plan is its mini-GOP
+	 * state (ave_gop.h).
+	 */
+	u32			b_frames, p_refs;
+	struct v4l2_ctrl	*min_out;
+	u32			nb;
+	struct ave_gop		plan;
+	/*
+	 * The codec (AVE_ENC_CODEC_*), from the CAPTURE format, and HEVC's own
+	 * controls. H.264's are the fields above; GOP, bitrate, RC and the
+	 * forced keyframe are shared.
+	 */
+	u32			codec;
+	u32			hevc_qp, hevc_qp_min, hevc_qp_max;
+	u32			hevc_qp_p, hevc_qp_b;
+	u32			hevc_level_idc;	/* general_level_idc floor */
+	bool			hevc_main10;	/* HEVC_PROFILE = MAIN_10 (docs/83) */
+	struct v4l2_ctrl	*hevc_profile;
+	u32			out_fourcc;	/* NV12, or P010 with HEVC */
+	u32			frame_n;	/* frames sent this stream */
+	u32			out_seq, cap_seq;
+	bool			session;	/* Open + Start_AVC done */
+	/*
+	 * docs/86: a system suspend ended this stream's session. Every job
+	 * still queued fails and the queues are in error until the client
+	 * stops streaming and starts again.
+	 */
+	bool			pm_lost;
+};
+
+static inline struct ave_ctx *fh_to_ctx(struct file *file)
+{
+	return container_of(file_to_v4l2_fh(file), struct ave_ctx, fh);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Formats                                                                */
+/* ---------------------------------------------------------------------- */
+
+/*
+ * Whole macroblocks; the line stride (bytesperline) is 64-byte aligned on
+ * its own. Width used to be rounded to 64 as well, which left no crop for a
+ * 720-wide picture (768 - 14 = 754 at most): SD sources came out wrong.
+ */
+static void ave_clamp_size(u32 *w, u32 *h)
+{
+	*w = clamp_t(u32, ALIGN(*w, 16), AVE_MIN_W, AVE_MAX_W);
+	*h = clamp_t(u32, ALIGN(*h, 16), AVE_MIN_H, AVE_MAX_H);
+}
+
+/*
+ * H.264: the planes exactly. HEVC: chroma room for whole 64-row CTB pairs,
+ * as the self-test's source was allocated for every HEVC frame that has
+ * encoded (h2c..h3h). Whether the HEVC fetcher reads 32-row CTUs past a
+ * 720-line picture is unknown (docs/77 §8.2 H2); luma rows past the picture
+ * land in the chroma plane, chroma rows past it in this slack, never past
+ * the buffer. The chroma plane still starts at bytesperline * height.
+ */
+static u32 ave_out_size(u32 codec, u32 bpl, u32 h)
+{
+	if (codec == AVE_ENC_CODEC_HEVC)
+		return bpl * h + bpl * (ALIGN(h, 64) / 2);
+	return bpl * h * 3 / 2;
+}
+
+static u32 ave_cap_fourcc(u32 codec)
+{
+	return codec == AVE_ENC_CODEC_HEVC ? V4L2_PIX_FMT_HEVC :
+					     V4L2_PIX_FMT_H264;
+}
+
+/* Worst case is I_PCM, 384 bytes per MB plus headers (f43); add slack. */
+static u32 ave_cap_size(u32 w, u32 h)
+{
+	return ALIGN(w * h * 3 / 2 + SZ_64K, SZ_4K);
+}
+
+static void ave_fill_out_fmt(const struct ave_ctx *ctx,
+			     struct v4l2_pix_format *p, u32 w, u32 h)
+{
+	/*
+	 * P010 (docs/83): two bytes a sample, same geometry. Accepted whatever
+	 * CAPTURE says now: GStreamer probes the raw formats at open, before
+	 * any codec is chosen, and sets OUTPUT before CAPTURE (m7). HEVC is
+	 * the only codec that takes it; H.264 + P010 is refused at STREAMON.
+	 */
+	const bool p010 = p->pixelformat == V4L2_PIX_FMT_P010 && ctx->av->hevc;
+
+	ave_clamp_size(&w, &h);
+	p->width = w;
+	p->height = h;
+	p->pixelformat = p010 ? V4L2_PIX_FMT_P010 : V4L2_PIX_FMT_NV12;
+	p->field = V4L2_FIELD_NONE;
+	/* Recomputed every time: ffmpeg sends back our stale 0x0 answer. */
+	p->bytesperline = ALIGN(w, 64) * (p010 ? 2 : 1);
+	p->sizeimage = ave_out_size(ctx->codec, p->bytesperline, h);
+	/* Colorimetry is the application's to set; only fill in "default". */
+	if (p->colorspace == V4L2_COLORSPACE_DEFAULT)
+		p->colorspace = V4L2_COLORSPACE_REC709;
+}
+
+static void ave_fill_cap_fmt(const struct ave_ctx *ctx,
+			     struct v4l2_pix_format *p, u32 w, u32 h,
+			     u32 req_size)
+{
+	p->width = w;
+	p->height = h;
+	/* The codec asked for, if offered; else the one already set. */
+	if (p->pixelformat != V4L2_PIX_FMT_H264 &&
+	    !(p->pixelformat == V4L2_PIX_FMT_HEVC && ctx->av->hevc))
+		p->pixelformat = ave_cap_fourcc(ctx->codec);
+	p->field = V4L2_FIELD_NONE;
+	p->bytesperline = 0;
+	/* ffmpeg's request is a floor, never a ceiling (docs/68 §3.4). */
+	p->sizeimage = max(req_size, ave_cap_size(w, h));
+	/* The coded stream carries the source's colorimetry. */
+	p->colorspace = ctx->colorspace;
+	p->ycbcr_enc = ctx->ycbcr_enc;
+	p->quantization = ctx->quantization;
+	p->xfer_func = ctx->xfer_func;
+}
+
+/*
+ * The node's identity, not the bound encoder's (docs/98 §12): clients match
+ * bus_info to the device they opened, and the encoders open_balance chooses
+ * between are alike in everything else QUERYCAP says.
+ */
+static int ave_querycap(struct file *file, void *priv,
+			struct v4l2_capability *cap)
+{
+	struct ave_v4l2 *av = video_drvdata(file);
+
+	strscpy(cap->driver, AVE_V4L2_NAME, sizeof(cap->driver));
+	strscpy(cap->card, av->hevc ? "Apple AVE H.264/HEVC encoder" :
+				      "Apple AVE H.264 encoder",
+		sizeof(cap->card));
+	if (av->ave->soc->inst)
+		snprintf(cap->bus_info, sizeof(cap->bus_info), "platform:%s%u",
+			 AVE_V4L2_NAME, av->ave->soc->inst);
+	else
+		snprintf(cap->bus_info, sizeof(cap->bus_info), "platform:%s",
+			 AVE_V4L2_NAME);
+	return 0;
+}
+
+static int ave_enum_fmt(struct file *file, void *priv, struct v4l2_fmtdesc *f)
+{
+	struct ave_v4l2 *av = fh_to_ctx(file)->av;
+
+	if (V4L2_TYPE_IS_OUTPUT(f->type)) {
+		/* P010 whenever HEVC exists (see ave_fill_out_fmt) */
+		if (f->index > (av->hevc ? 1 : 0))
+			return -EINVAL;
+		f->pixelformat = f->index ? V4L2_PIX_FMT_P010 : V4L2_PIX_FMT_NV12;
+	} else {
+		/* H.264 first: the default, and index 0 as before HEVC. */
+		if (f->index > (av->hevc ? 1 : 0))
+			return -EINVAL;
+		f->pixelformat = ave_cap_fourcc(f->index ? AVE_ENC_CODEC_HEVC :
+							   AVE_ENC_CODEC_H264);
+		f->flags = V4L2_FMT_FLAG_COMPRESSED;
+	}
+	return 0;
+}
+
+static int ave_enum_framesizes(struct file *file, void *priv,
+			       struct v4l2_frmsizeenum *fs)
+{
+	struct ave_v4l2 *av = fh_to_ctx(file)->av;
+
+	if (fs->index || (fs->pixel_format != V4L2_PIX_FMT_NV12 &&
+			  !(fs->pixel_format == V4L2_PIX_FMT_P010 && av->hevc) &&
+			  fs->pixel_format != V4L2_PIX_FMT_H264 &&
+			  !(fs->pixel_format == V4L2_PIX_FMT_HEVC && av->hevc)))
+		return -EINVAL;
+	fs->type = V4L2_FRMSIZE_TYPE_STEPWISE;
+	fs->stepwise.min_width = AVE_MIN_W;
+	fs->stepwise.max_width = AVE_MAX_W;
+	fs->stepwise.step_width = 64;
+	fs->stepwise.min_height = AVE_MIN_H;
+	fs->stepwise.max_height = AVE_MAX_H;
+	fs->stepwise.step_height = 16;
+	return 0;
+}
+
+static int ave_g_fmt(struct file *file, void *priv, struct v4l2_format *f)
+{
+	struct ave_ctx *ctx = fh_to_ctx(file);
+
+	if (V4L2_TYPE_IS_OUTPUT(f->type)) {
+		f->fmt.pix.colorspace = ctx->colorspace;
+		f->fmt.pix.pixelformat = ctx->out_fourcc;
+		ave_fill_out_fmt(ctx, &f->fmt.pix, ctx->width, ctx->height);
+		f->fmt.pix.ycbcr_enc = ctx->ycbcr_enc;
+		f->fmt.pix.quantization = ctx->quantization;
+		f->fmt.pix.xfer_func = ctx->xfer_func;
+	} else {
+		f->fmt.pix.pixelformat = ave_cap_fourcc(ctx->codec);
+		ave_fill_cap_fmt(ctx, &f->fmt.pix, ctx->width, ctx->height,
+				 ctx->cap_size);
+	}
+	return 0;
+}
+
+static int ave_try_fmt(struct file *file, void *priv, struct v4l2_format *f)
+{
+	struct ave_ctx *ctx = fh_to_ctx(file);
+
+	/* 0x0 is ffmpeg's first question; clamp, never refuse (docs/68 §3.3). */
+	if (V4L2_TYPE_IS_OUTPUT(f->type))
+		ave_fill_out_fmt(ctx, &f->fmt.pix, f->fmt.pix.width,
+				 f->fmt.pix.height);
+	else
+		ave_fill_cap_fmt(ctx, &f->fmt.pix, ctx->width, ctx->height,
+				 f->fmt.pix.sizeimage);
+	return 0;
+}
+
+static int ave_s_fmt(struct file *file, void *priv, struct v4l2_format *f)
+{
+	struct ave_ctx *ctx = fh_to_ctx(file);
+	struct vb2_queue *vq = v4l2_m2m_get_vq(ctx->fh.m2m_ctx, f->type);
+	u32 codec;
+
+	if (vb2_is_busy(vq))
+		return -EBUSY;
+	ave_try_fmt(file, priv, f);
+	if (V4L2_TYPE_IS_OUTPUT(f->type)) {
+		ctx->width = f->fmt.pix.width;
+		ctx->height = f->fmt.pix.height;
+		ctx->bytesperline = f->fmt.pix.bytesperline;
+		ctx->out_fourcc = f->fmt.pix.pixelformat;
+		/*
+		 * P010 means Main 10: ffmpeg never sets the profile, and GStreamer
+		 * sets main-10 anyway. Main 10 from NV12 stays possible by setting
+		 * the control after the format.
+		 */
+		if (ctx->out_fourcc == V4L2_PIX_FMT_P010 && ctx->hevc_profile)
+			v4l2_ctrl_s_ctrl(ctx->hevc_profile,
+					 V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN_10);
+		ctx->out_size = f->fmt.pix.sizeimage;
+		ctx->crop = (struct v4l2_rect){ 0, 0, ctx->width, ctx->height };
+		ctx->colorspace = f->fmt.pix.colorspace;
+		ctx->ycbcr_enc = f->fmt.pix.ycbcr_enc;
+		ctx->quantization = f->fmt.pix.quantization;
+		ctx->xfer_func = f->fmt.pix.xfer_func;
+		ctx->cap_size = max(ctx->cap_size,
+				    ave_cap_size(ctx->width, ctx->height));
+	} else {
+		codec = f->fmt.pix.pixelformat == V4L2_PIX_FMT_HEVC ?
+			AVE_ENC_CODEC_HEVC : AVE_ENC_CODEC_H264;
+		/*
+		 * The codec sizes the OUTPUT buffers (ave_out_size), so it
+		 * cannot change under allocated ones.
+		 */
+		if (codec != ctx->codec) {
+			if (vb2_is_busy(v4l2_m2m_get_vq(ctx->fh.m2m_ctx,
+					V4L2_BUF_TYPE_VIDEO_OUTPUT)))
+				return -EBUSY;
+			ctx->codec = codec;
+			/* P010 is HEVC-only: back to NV12 for H.264 */
+			if (codec != AVE_ENC_CODEC_HEVC &&
+			    ctx->out_fourcc == V4L2_PIX_FMT_P010) {
+				ctx->out_fourcc = V4L2_PIX_FMT_NV12;
+				ctx->bytesperline = ALIGN(ctx->width, 64);
+			}
+			ctx->out_size = ave_out_size(codec, ctx->bytesperline,
+						     ctx->height);
+		}
+		ctx->cap_size = f->fmt.pix.sizeimage;
+	}
+	return 0;
+}
+
+static int ave_g_parm(struct file *file, void *priv, struct v4l2_streamparm *a)
+{
+	struct ave_ctx *ctx = fh_to_ctx(file);
+
+	if (!V4L2_TYPE_IS_OUTPUT(a->type))
+		return -EINVAL;
+	a->parm.output.capability = V4L2_CAP_TIMEPERFRAME;
+	a->parm.output.timeperframe = ctx->timeperframe;
+	return 0;
+}
+
+static int ave_s_parm(struct file *file, void *priv, struct v4l2_streamparm *a)
+{
+	struct ave_ctx *ctx = fh_to_ctx(file);
+	struct v4l2_fract *t = &a->parm.output.timeperframe;
+
+	if (!V4L2_TYPE_IS_OUTPUT(a->type))
+		return -EINVAL;
+	/*
+	 * Recorded, not sent: the fixed-QP session does not use the frame
+	 * rate. It goes on the wire with rate control (docs/66).
+	 */
+	if (t->numerator && t->denominator)
+		ctx->timeperframe = *t;
+	a->parm.output.capability = V4L2_CAP_TIMEPERFRAME;
+	*t = ctx->timeperframe;
+	return 0;
+}
+
+static int ave_g_selection(struct file *file, void *priv,
+			   struct v4l2_selection *s)
+{
+	struct ave_ctx *ctx = fh_to_ctx(file);
+
+	if (s->type != V4L2_BUF_TYPE_VIDEO_OUTPUT)
+		return -EINVAL;
+	switch (s->target) {
+	case V4L2_SEL_TGT_CROP:
+		s->r = ctx->crop;
+		return 0;
+	case V4L2_SEL_TGT_CROP_DEFAULT:
+	case V4L2_SEL_TGT_CROP_BOUNDS:
+		s->r = (struct v4l2_rect){ 0, 0, ctx->width, ctx->height };
+		return 0;
+	default:
+		return -EINVAL;
+	}
+}
+
+static int ave_s_selection(struct file *file, void *priv,
+			   struct v4l2_selection *s)
+{
+	struct ave_ctx *ctx = fh_to_ctx(file);
+	struct vb2_queue *vq = v4l2_m2m_get_vq(ctx->fh.m2m_ctx, s->type);
+
+	if (s->type != V4L2_BUF_TYPE_VIDEO_OUTPUT || s->target != V4L2_SEL_TGT_CROP)
+		return -EINVAL;
+	if (vb2_is_streaming(vq))
+		return -EBUSY;
+	/*
+	 * SPS cropping only trims right and bottom, by less than one MB, in
+	 * 2-pixel units (4:2:0); the firmware needs at least 192x96.
+	 */
+	s->r.left = 0;
+	s->r.top = 0;
+	s->r.width = clamp_t(u32, ALIGN(s->r.width, 2),
+			     max_t(u32, AVE_MIN_W, ALIGN(ctx->width, 16) - 14),
+			     ctx->width);
+	s->r.height = clamp_t(u32, ALIGN(s->r.height, 2),
+			      max_t(u32, AVE_MIN_H, ALIGN(ctx->height, 16) - 14),
+			      ctx->height);
+	ctx->crop = s->r;
+	return 0;
+}
+
+static int ave_subscribe_event(struct v4l2_fh *fh,
+			       const struct v4l2_event_subscription *sub)
+{
+	switch (sub->type) {
+	case V4L2_EVENT_EOS:
+		return v4l2_event_subscribe(fh, sub, 0, NULL);
+	default:
+		return v4l2_ctrl_subscribe_event(fh, sub);
+	}
+}
+
+/*
+ * STOP, and with B frames a nudge: when the drain's last source is a held B
+ * no new buffer will arrive to schedule the job that closes its mini-GOP.
+ */
+static int ave_encoder_cmd(struct file *file, void *priv,
+			   struct v4l2_encoder_cmd *ec)
+{
+	struct ave_ctx *ctx = fh_to_ctx(file);
+	int ret = v4l2_m2m_ioctl_encoder_cmd(file, priv, ec);
+
+	if (!ret && ctx->nb && ec->cmd == V4L2_ENC_CMD_STOP)
+		v4l2_m2m_try_schedule(ctx->fh.m2m_ctx);
+	return ret;
+}
+
+static const struct v4l2_ioctl_ops ave_ioctl_ops = {
+	.vidioc_querycap		= ave_querycap,
+	.vidioc_enum_fmt_vid_out	= ave_enum_fmt,
+	.vidioc_enum_fmt_vid_cap	= ave_enum_fmt,
+	.vidioc_enum_framesizes		= ave_enum_framesizes,
+	.vidioc_g_fmt_vid_out		= ave_g_fmt,
+	.vidioc_g_fmt_vid_cap		= ave_g_fmt,
+	.vidioc_try_fmt_vid_out		= ave_try_fmt,
+	.vidioc_try_fmt_vid_cap		= ave_try_fmt,
+	.vidioc_s_fmt_vid_out		= ave_s_fmt,
+	.vidioc_s_fmt_vid_cap		= ave_s_fmt,
+	.vidioc_g_selection		= ave_g_selection,
+	.vidioc_s_selection		= ave_s_selection,
+	.vidioc_g_parm			= ave_g_parm,
+	.vidioc_s_parm			= ave_s_parm,
+
+	.vidioc_reqbufs			= v4l2_m2m_ioctl_reqbufs,
+	.vidioc_querybuf		= v4l2_m2m_ioctl_querybuf,
+	.vidioc_qbuf			= v4l2_m2m_ioctl_qbuf,
+	.vidioc_dqbuf			= v4l2_m2m_ioctl_dqbuf,
+	.vidioc_prepare_buf		= v4l2_m2m_ioctl_prepare_buf,
+	.vidioc_create_bufs		= v4l2_m2m_ioctl_create_bufs,
+	.vidioc_expbuf			= v4l2_m2m_ioctl_expbuf,
+	.vidioc_streamon		= v4l2_m2m_ioctl_streamon,
+	.vidioc_streamoff		= v4l2_m2m_ioctl_streamoff,
+
+	.vidioc_encoder_cmd		= ave_encoder_cmd,
+	.vidioc_try_encoder_cmd		= v4l2_m2m_ioctl_try_encoder_cmd,
+
+	.vidioc_subscribe_event		= ave_subscribe_event,
+	.vidioc_unsubscribe_event	= v4l2_event_unsubscribe,
+};
+
+/* ---------------------------------------------------------------------- */
+/* Controls                                                               */
+/* ---------------------------------------------------------------------- */
+
+static int ave_s_ctrl(struct v4l2_ctrl *c)
+{
+	struct ave_ctx *ctx = container_of(c->handler, struct ave_ctx, hdl);
+
+	switch (c->id) {
+	case V4L2_CID_MPEG_VIDEO_H264_I_FRAME_QP:
+		ctx->qp = c->val;	/* one QP for I and P until RC (docs/68 §3.5) */
+		break;
+	case V4L2_CID_MPEG_VIDEO_GOP_SIZE:
+		ctx->gop = c->val;
+		break;
+	case V4L2_CID_MPEG_VIDEO_H264_PROFILE:
+		ctx->profile_idc =
+			c->val == V4L2_MPEG_VIDEO_H264_PROFILE_HIGH ? 100 :
+			c->val == V4L2_MPEG_VIDEO_H264_PROFILE_MAIN ? 77 : 66;
+		break;
+	case V4L2_CID_MPEG_VIDEO_H264_LEVEL: {
+		/* V4L2 menu order -> level_idc (1b is signalled as 1.1 + flag; use 11). */
+		static const u8 idc[] = { 10, 11, 11, 12, 13, 20, 21, 22, 30, 31,
+					  32, 40, 41, 42, 50, 51, 52 };
+
+		ctx->level_idc = c->val < ARRAY_SIZE(idc) ? idc[c->val] : 52;
+		break;
+	}
+	case V4L2_CID_MPEG_VIDEO_BITRATE:
+		ctx->bitrate = c->val;
+		break;
+	case V4L2_CID_MPEG_VIDEO_FRAME_RC_ENABLE:
+		ctx->rc_enable = c->val;
+		break;
+	case V4L2_CID_MPEG_VIDEO_BITRATE_MODE:
+		ctx->bitrate_mode = c->val;
+		break;
+	case V4L2_CID_MPEG_VIDEO_H264_P_FRAME_QP:
+		ctx->qp_p = c->val;	/* docs/92: Start wire 0xFFB8 */
+		break;
+	case V4L2_CID_MPEG_VIDEO_H264_B_FRAME_QP:
+		ctx->qp_b = c->val;
+		break;
+	case V4L2_CID_MPEG_VIDEO_H264_MIN_QP:
+		ctx->qp_min = c->val;
+		break;
+	case V4L2_CID_MPEG_VIDEO_H264_MAX_QP:
+		ctx->qp_max = c->val;
+		break;
+	case V4L2_CID_MPEG_VIDEO_H264_ENTROPY_MODE:
+		ctx->cabac = c->val == V4L2_MPEG_VIDEO_H264_ENTROPY_MODE_CABAC;
+		break;
+	case V4L2_CID_MPEG_VIDEO_FORCE_KEY_FRAME:
+		ctx->force_key = true;
+		break;
+	case V4L2_CID_MPEG_VIDEO_B_FRAMES:
+		ctx->b_frames = c->val;
+		/* the held Bs, their anchor, and one being filled */
+		if (ctx->min_out)
+			__v4l2_ctrl_s_ctrl(ctx->min_out, c->val ? c->val + 2 : 1);
+		break;
+	case V4L2_CID_MPEG_VIDEO_REF_NUMBER_FOR_PFRAMES:
+		ctx->p_refs = c->val;
+		break;
+	case V4L2_CID_MPEG_VIDEO_HEVC_I_FRAME_QP:
+		ctx->hevc_qp = c->val;	/* one QP for I and P, as H.264 */
+		break;
+	case V4L2_CID_MPEG_VIDEO_HEVC_P_FRAME_QP:
+		ctx->hevc_qp_p = c->val;
+		break;
+	case V4L2_CID_MPEG_VIDEO_HEVC_B_FRAME_QP:
+		ctx->hevc_qp_b = c->val;
+		break;
+	case V4L2_CID_MPEG_VIDEO_HEVC_MIN_QP:
+		ctx->hevc_qp_min = c->val;
+		break;
+	case V4L2_CID_MPEG_VIDEO_HEVC_MAX_QP:
+		ctx->hevc_qp_max = c->val;
+		break;
+	case V4L2_CID_MPEG_VIDEO_HEVC_PROFILE:
+		ctx->hevc_main10 = c->val == V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN_10;
+		break;
+	case V4L2_CID_MPEG_VIDEO_HEVC_LEVEL: {
+		/* V4L2 menu order -> general_level_idc (30 x level, Table A.8). */
+		static const u8 idc[] = { 30, 60, 63, 90, 93, 120, 123, 150,
+					  153, 156, 180, 183, 186 };
+
+		ctx->hevc_level_idc = c->val < ARRAY_SIZE(idc) ? idc[c->val] : 186;
+		break;
+	}
+	default:
+		/*
+		 * Accepted and stored so that clients which set them blind -
+		 * ffmpeg sets BITRATE and FRAME_RC_ENABLE on every open -
+		 * succeed; the session is fixed-QP (docs/68 §3.5). HEVC_PROFILE
+		 * and HEVC_TIER have one value each (Main, Main tier).
+		 */
+		break;
+	}
+	return 0;
+}
+
+static const struct v4l2_ctrl_ops ave_ctrl_ops = {
+	.s_ctrl = ave_s_ctrl,
+};
+
+static int ave_init_ctrls(struct ave_ctx *ctx)
+{
+	struct v4l2_ctrl_handler *h = &ctx->hdl;
+	const struct v4l2_ctrl_ops *o = &ave_ctrl_ops;
+	/* docs/89 §9: where two references hang, the ranges stop at 0 and 1 */
+	const bool two = ctx->av->two_refs;
+
+	v4l2_ctrl_handler_init(h, 22);
+	/*
+	 * ffmpeg sets 0 and reads it back; non-zero fails its open (docs/81
+	 * §3.2), so 0 stays the default. 1..2 (docs/81 "V4L2 implementation").
+	 */
+	v4l2_ctrl_new_std(h, o, V4L2_CID_MPEG_VIDEO_B_FRAMES, 0,
+			  two ? AVE_GOP_B_MAX : 0, 1, 0);
+	/* 2: two L0 references per P frame (docs/94) */
+	v4l2_ctrl_new_std(h, o, V4L2_CID_MPEG_VIDEO_REF_NUMBER_FOR_PFRAMES,
+			  1, two ? 2 : 1, 1, 1);
+	v4l2_ctrl_new_std(h, o, V4L2_CID_MPEG_VIDEO_GOP_SIZE, 0, 65535, 1, 0);
+	v4l2_ctrl_new_std(h, o, V4L2_CID_MPEG_VIDEO_FORCE_KEY_FRAME, 0, 0, 0, 0);
+	v4l2_ctrl_new_std(h, o, V4L2_CID_MPEG_VIDEO_H264_I_FRAME_QP, 0, 51, 1,
+			  AVE_DEF_QP);
+	/* 0 = the I-frame QP (docs/92); a B QP of 0 with B frames on: + 3 (docs/96) */
+	v4l2_ctrl_new_std(h, o, V4L2_CID_MPEG_VIDEO_H264_P_FRAME_QP, 0, 51, 1, 0);
+	v4l2_ctrl_new_std(h, o, V4L2_CID_MPEG_VIDEO_H264_B_FRAME_QP, 0, 51, 1, 0);
+	v4l2_ctrl_new_std(h, o, V4L2_CID_MPEG_VIDEO_H264_MIN_QP, 0, 51, 1, 10);
+	v4l2_ctrl_new_std(h, o, V4L2_CID_MPEG_VIDEO_H264_MAX_QP, 0, 51, 1, 51);
+	v4l2_ctrl_new_std(h, o, V4L2_CID_MPEG_VIDEO_BITRATE, 1, 400000000, 1,
+			  10000000);
+	v4l2_ctrl_new_std(h, o, V4L2_CID_MPEG_VIDEO_FRAME_RC_ENABLE, 0, 1, 1, 0);
+	/*
+	 * VBR by default, so a client that turns FRAME_RC_ENABLE on - ffmpeg
+	 * always does, with its -b:v - gets the firmware's controller (f78:
+	 * 2 Mbit/s asked, 1.98 got). With RC off it is fixed QP regardless.
+	 */
+	v4l2_ctrl_new_std_menu(h, o, V4L2_CID_MPEG_VIDEO_BITRATE_MODE,
+			       V4L2_MPEG_VIDEO_BITRATE_MODE_CQ,
+			       ~(BIT(V4L2_MPEG_VIDEO_BITRATE_MODE_CQ) |
+				 BIT(V4L2_MPEG_VIDEO_BITRATE_MODE_VBR)),
+			       V4L2_MPEG_VIDEO_BITRATE_MODE_VBR);
+	/*
+	 * High + CABAC by default: the best compression, and what any decoder
+	 * made this century handles (f74/f75). Baseline is always CAVLC.
+	 */
+	v4l2_ctrl_new_std_menu(h, o, V4L2_CID_MPEG_VIDEO_H264_PROFILE,
+			       V4L2_MPEG_VIDEO_H264_PROFILE_HIGH,
+			       ~(BIT(V4L2_MPEG_VIDEO_H264_PROFILE_BASELINE) |
+				 BIT(V4L2_MPEG_VIDEO_H264_PROFILE_CONSTRAINED_BASELINE) |
+				 BIT(V4L2_MPEG_VIDEO_H264_PROFILE_MAIN) |
+				 BIT(V4L2_MPEG_VIDEO_H264_PROFILE_HIGH)),
+			       V4L2_MPEG_VIDEO_H264_PROFILE_HIGH);
+	v4l2_ctrl_new_std_menu(h, o, V4L2_CID_MPEG_VIDEO_H264_ENTROPY_MODE,
+			       V4L2_MPEG_VIDEO_H264_ENTROPY_MODE_CABAC, 0,
+			       V4L2_MPEG_VIDEO_H264_ENTROPY_MODE_CABAC);
+	/*
+	 * Any level the firmware accepts (10..52). It is a floor: the SPS
+	 * carries the higher of this and what the picture size needs. GStreamer
+	 * negotiates by setting it, and gave up when only 4.0 was allowed.
+	 */
+	v4l2_ctrl_new_std_menu(h, o, V4L2_CID_MPEG_VIDEO_H264_LEVEL,
+			       V4L2_MPEG_VIDEO_H264_LEVEL_5_2, 0,
+			       V4L2_MPEG_VIDEO_H264_LEVEL_4_0);
+	v4l2_ctrl_new_std_menu(h, o, V4L2_CID_MPEG_VIDEO_HEADER_MODE,
+			       V4L2_MPEG_VIDEO_HEADER_MODE_JOINED_WITH_1ST_FRAME,
+			       ~BIT(V4L2_MPEG_VIDEO_HEADER_MODE_JOINED_WITH_1ST_FRAME),
+			       V4L2_MPEG_VIDEO_HEADER_MODE_JOINED_WITH_1ST_FRAME);
+	/* 1, or B_FRAMES + 2 (ave_s_ctrl) */
+	ctx->min_out = v4l2_ctrl_new_std(h, o, V4L2_CID_MIN_BUFFERS_FOR_OUTPUT,
+					 1, AVE_GOP_B_MAX + 2, 1, 1);
+	/*
+	 * HEVC (docs/77 §19), only where the firmware can run it. Main, Main
+	 * tier: what the builder writes. The level is a floor, as H.264's -
+	 * the SPS carries the higher of it and what the size needs - and any
+	 * Table A.8 level is accepted, so GStreamer can negotiate by setting
+	 * it. QP defaults as H.264's.
+	 */
+	if (ctx->av->hevc) {
+		/* Main 10 (docs/83): 10-bit coding from NV12 or P010 */
+		ctx->hevc_profile = v4l2_ctrl_new_std_menu(h, o,
+				       V4L2_CID_MPEG_VIDEO_HEVC_PROFILE,
+				       V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN_10,
+				       ~(BIT(V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN) |
+					 BIT(V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN_10)),
+				       V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN);
+		v4l2_ctrl_new_std_menu(h, o, V4L2_CID_MPEG_VIDEO_HEVC_TIER,
+				       V4L2_MPEG_VIDEO_HEVC_TIER_MAIN,
+				       ~BIT(V4L2_MPEG_VIDEO_HEVC_TIER_MAIN),
+				       V4L2_MPEG_VIDEO_HEVC_TIER_MAIN);
+		v4l2_ctrl_new_std_menu(h, o, V4L2_CID_MPEG_VIDEO_HEVC_LEVEL,
+				       V4L2_MPEG_VIDEO_HEVC_LEVEL_6_2, 0,
+				       V4L2_MPEG_VIDEO_HEVC_LEVEL_4);
+		v4l2_ctrl_new_std(h, o, V4L2_CID_MPEG_VIDEO_HEVC_I_FRAME_QP,
+				  0, 51, 1, AVE_DEF_QP);
+		v4l2_ctrl_new_std(h, o, V4L2_CID_MPEG_VIDEO_HEVC_P_FRAME_QP,
+				  0, 51, 1, 0);
+		v4l2_ctrl_new_std(h, o, V4L2_CID_MPEG_VIDEO_HEVC_B_FRAME_QP,
+				  0, 51, 1, 0);
+		v4l2_ctrl_new_std(h, o, V4L2_CID_MPEG_VIDEO_HEVC_MIN_QP,
+				  0, 51, 1, 10);
+		v4l2_ctrl_new_std(h, o, V4L2_CID_MPEG_VIDEO_HEVC_MAX_QP,
+				  0, 51, 1, 51);
+	}
+	if (h->error) {
+		int err = h->error;
+
+		v4l2_ctrl_handler_free(h);
+		return err;
+	}
+	ctx->fh.ctrl_handler = h;
+	return v4l2_ctrl_handler_setup(h);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Queues                                                                 */
+/* ---------------------------------------------------------------------- */
+
+static int ave_queue_setup(struct vb2_queue *vq, unsigned int *nbuf,
+			   unsigned int *nplanes, unsigned int sizes[],
+			   struct device *alloc_devs[])
+{
+	struct ave_ctx *ctx = vb2_get_drv_priv(vq);
+	u32 size = V4L2_TYPE_IS_OUTPUT(vq->type) ? ctx->out_size : ctx->cap_size;
+
+	if (*nplanes)
+		return sizes[0] < size ? -EINVAL : 0;
+	*nplanes = 1;
+	sizes[0] = size;
+	/*
+	 * B frames: the held sources, their anchor and one more on OUTPUT;
+	 * one CAPTURE buffer per frame of a mini-GOP, which completes at once.
+	 */
+	if (ctx->b_frames)
+		*nbuf = max_t(unsigned int, *nbuf, V4L2_TYPE_IS_OUTPUT(vq->type) ?
+			      ctx->b_frames + 2 : ctx->b_frames + 1);
+	return 0;
+}
+
+static int ave_buf_out_validate(struct vb2_buffer *vb)
+{
+	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
+
+	if (vbuf->field == V4L2_FIELD_ANY)
+		vbuf->field = V4L2_FIELD_NONE;
+	return vbuf->field == V4L2_FIELD_NONE ? 0 : -EINVAL;
+}
+
+static int ave_buf_prepare(struct vb2_buffer *vb)
+{
+	struct ave_ctx *ctx = vb2_get_drv_priv(vb->vb2_queue);
+	u32 size = V4L2_TYPE_IS_OUTPUT(vb->type) ? ctx->out_size : ctx->cap_size;
+
+	if (vb2_plane_size(vb, 0) < size)
+		return -EINVAL;
+	/*
+	 * The hardware reads each plane from its IOVA, which must be 64-byte
+	 * aligned (kext 0xeb0768); dma-contig gives page alignment, and the
+	 * chroma offset bytesperline * height is a multiple of 64 * 16.
+	 */
+	if (V4L2_TYPE_IS_OUTPUT(vb->type) &&
+	    (vb2_dma_contig_plane_dma_addr(vb, 0) & 63))
+		return -EINVAL;
+	if (!V4L2_TYPE_IS_OUTPUT(vb->type))
+		vb2_set_plane_payload(vb, 0, 0);
+	return 0;
+}
+
+static void ave_buf_queue(struct vb2_buffer *vb)
+{
+	struct ave_ctx *ctx = vb2_get_drv_priv(vb->vb2_queue);
+	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
+
+	if (!V4L2_TYPE_IS_OUTPUT(vb->type) &&
+	    vb2_is_streaming(vb->vb2_queue) &&
+	    v4l2_m2m_dst_buf_is_last(ctx->fh.m2m_ctx)) {
+		/* Drained: this buffer carries the LAST flag and nothing else. */
+		vbuf->sequence = ctx->cap_seq++;
+		vbuf->field = V4L2_FIELD_NONE;
+		v4l2_m2m_last_buffer_done(ctx->fh.m2m_ctx, vbuf);
+		return;
+	}
+	v4l2_m2m_buf_queue(ctx->fh.m2m_ctx, vbuf);
+}
+
+static void ave_return_bufs(struct ave_ctx *ctx, struct vb2_queue *q,
+			    enum vb2_buffer_state state)
+{
+	struct vb2_v4l2_buffer *vb;
+
+	for (;;) {
+		vb = V4L2_TYPE_IS_OUTPUT(q->type) ?
+			v4l2_m2m_src_buf_remove(ctx->fh.m2m_ctx) :
+			v4l2_m2m_dst_buf_remove(ctx->fh.m2m_ctx);
+		if (!vb)
+			break;
+		v4l2_m2m_buf_done(vb, state);
+	}
+}
+
+/*
+ * VIDEO_B_FRAMES for the stream about to start, refused (to 0, logged) or
+ * clamped where it cannot work (docs/81 §3.3 #1): Baseline/CBP has no B
+ * slices; a GOP needs room for a mini-GOP and the anchor before its IDR.
+ */
+/* B QP over the I QP when B frames are on and no B QP is set (docs/96) */
+#define AVE_B_QP_OFFSET	3
+
+static u32 ave_latch_bframes(struct ave_ctx *ctx)
+{
+	struct device *dev = ctx->av->ave->dev;
+	u32 nb = ctx->b_frames;
+
+	if (nb && ctx->codec == AVE_ENC_CODEC_H264 && ctx->profile_idc == 66) {
+		dev_warn(dev, "v4l2: B frames need H.264 Main or High; Baseline gets none\n");
+		nb = 0;
+	}
+	if (nb && ctx->codec == AVE_ENC_CODEC_H264 &&
+	    !ave_enc_two_refs_supported(ctx->av->ave, AVE_ENC_CODEC_H264)) {
+		dev_warn(dev, "v4l2: H.264 B frames hang on %s (docs/89 §9); none (HEVC has them)\n",
+			 ctx->av->ave->soc->name);
+		nb = 0;
+	}
+	if (nb && ctx->gop && ctx->gop < nb + 2) {
+		u32 fit = ctx->gop >= 3 ? ctx->gop - 2 : 0;
+
+		dev_warn(dev, "v4l2: GOP %u leaves no room for %u B frame(s); using %u\n",
+			 ctx->gop, nb, fit);
+		nb = fit;
+	}
+	return nb;
+}
+
+static int ave_start_streaming(struct vb2_queue *q, unsigned int count)
+{
+	struct ave_ctx *ctx = vb2_get_drv_priv(q);
+	struct ave_v4l2 *av = ctx->av;
+	u32 nb;
+	struct vb2_queue *other = v4l2_m2m_get_vq(ctx->fh.m2m_ctx,
+		V4L2_TYPE_IS_OUTPUT(q->type) ? V4L2_BUF_TYPE_VIDEO_CAPTURE :
+					       V4L2_BUF_TYPE_VIDEO_OUTPUT);
+	int ret = 0;
+
+	v4l2_m2m_update_start_streaming_state(ctx->fh.m2m_ctx, q);
+	if (V4L2_TYPE_IS_OUTPUT(q->type))
+		ctx->out_seq = 0;
+	else
+		ctx->cap_seq = 0;
+
+	/* Open + Start_AVC when the second queue starts (docs/68 §7 step 5). */
+	if (!vb2_is_streaming(other) || ctx->session)
+		return 0;
+	if (ctx->codec != AVE_ENC_CODEC_HEVC &&
+	    ctx->out_fourcc == V4L2_PIX_FMT_P010) {
+		dev_err(av->ave->dev, "v4l2: P010 input needs HEVC; H.264 takes NV12 only\n");
+		ave_return_bufs(ctx, q, VB2_BUF_STATE_QUEUED);
+		return -EINVAL;
+	}
+
+	nb = ave_latch_bframes(ctx);
+	mutex_lock(&av->hw_mutex);
+	if (av->owner && av->owner != ctx) {
+		ret = -EBUSY;
+	} else {
+		/* The firmware gets the MB-aligned size; the crop is SPS-only. */
+		u32 fps = clamp_t(u32, DIV_ROUND_CLOSEST(ctx->timeperframe.denominator,
+				  max_t(u32, ctx->timeperframe.numerator, 1)), 1, 240);
+		const bool hevc = ctx->codec == AVE_ENC_CODEC_HEVC;
+		struct ave_enc_cfg cfg = {
+			.codec = ctx->codec,
+			.width = ctx->width, .height = ctx->height,
+			.crop_w = ctx->crop.width, .crop_h = ctx->crop.height,
+			.qp = hevc ? ctx->hevc_qp : ctx->qp,
+			.qp_p = hevc ? ctx->hevc_qp_p : ctx->qp_p,
+			.qp_b = hevc ? ctx->hevc_qp_b : ctx->qp_b,
+			.qp_min = hevc ? ctx->hevc_qp_min : ctx->qp_min,
+			.qp_max = hevc ? ctx->hevc_qp_max : ctx->qp_max,
+			/*
+			 * The firmware's bits-per-pixel controller (docs/66,
+			 * docs/76) only in VBR mode; CQ, the default, is
+			 * fixed QP whatever ffmpeg sets FRAME_RC_ENABLE to.
+			 */
+			.bitrate = ctx->bitrate_mode ==
+					V4L2_MPEG_VIDEO_BITRATE_MODE_VBR &&
+				   ctx->rc_enable ? ctx->bitrate : 0,
+			/* The firmware reads 0xFF4C as integer Hz (docs/76). */
+			.fps_num = fps,
+			.fps_den = rc_nondrop ? fps : 1,
+			.slots = AVE_CODED_SLOTS,
+			/* HEVC: Main (1) or Main 10 (2), and always CABAC. */
+			.profile_idc = hevc ? (ctx->hevc_main10 ? 2 : 1) :
+				       ctx->profile_idc,
+			.src_bitdepth = hevc && ctx->out_fourcc ==
+					V4L2_PIX_FMT_P010 ? 10 : 8,
+			.level_idc = hevc ? ctx->hevc_level_idc : ctx->level_idc,
+			.cabac = !hevc && ctx->cabac,
+			.bframes = nb,
+			/* docs/89 §9: H.264 on t8103 keeps one reference */
+			.p_refs = ctx->codec == AVE_ENC_CODEC_H264 &&
+				  !ave_enc_two_refs_supported(av->ave, AVE_ENC_CODEC_H264) ?
+				  1 : ctx->p_refs,
+		};
+
+		/*
+		 * B frames without a B QP: the I QP + AVE_B_QP_OFFSET, the
+		 * best of the measured offsets (docs/96: B=1 at +3 is -7.6 %
+		 * VMAF / -9.7 % PSNR-Y BD-rate against P-only, on every clip;
+		 * at +0 it is -0.5 % / -4.2 %).
+		 */
+		if (nb && !cfg.qp_b)
+			cfg.qp_b = min_t(u32, cfg.qp + AVE_B_QP_OFFSET, 51);
+
+		ret = ave_enc_start(av->ave, &cfg);
+		if (!ret) {
+			av->owner = ctx;
+			ctx->session = true;
+			ctx->pm_lost = false;
+			ctx->frame_n = 0;
+			/* held sources of an earlier session start over */
+			ctx->nb = nb;
+			ave_gop_init(&ctx->plan, nb, ctx->gop);
+		}
+	}
+	mutex_unlock(&av->hw_mutex);
+	if (ret) {
+		dev_err(av->ave->dev, "v4l2: start %s %ux%u QP %u failed: %d\n",
+			ctx->codec == AVE_ENC_CODEC_HEVC ? "HEVC" : "H.264",
+			ctx->width, ctx->height,
+			ctx->codec == AVE_ENC_CODEC_HEVC ? ctx->hevc_qp : ctx->qp,
+			ret);
+		ave_return_bufs(ctx, q, VB2_BUF_STATE_QUEUED);
+	}
+	return ret;
+}
+
+static void ave_end_session(struct ave_ctx *ctx)
+{
+	struct ave_v4l2 *av = ctx->av;
+
+	if (!ctx->session)
+		return;
+	/* The run work may be mid-Process; the hw mutex waits it out. */
+	mutex_lock(&av->hw_mutex);
+	if (ave_enc_stop(av->ave))
+		dev_err(av->ave->dev,
+			"v4l2: Stop/Close failed; the firmware may still hold this stream's buffers\n");
+	if (av->owner == ctx)
+		av->owner = NULL;
+	ctx->session = false;
+	mutex_unlock(&av->hw_mutex);
+}
+
+static void ave_stop_streaming(struct vb2_queue *q)
+{
+	struct ave_ctx *ctx = vb2_get_drv_priv(q);
+
+	flush_work(&ctx->run_work);	/* m2m already waited for a running job */
+	ave_end_session(ctx);
+	ave_return_bufs(ctx, q, VB2_BUF_STATE_ERROR);
+	v4l2_m2m_update_stop_streaming_state(ctx->fh.m2m_ctx, q);
+	if (V4L2_TYPE_IS_OUTPUT(q->type) &&
+	    v4l2_m2m_has_stopped(ctx->fh.m2m_ctx)) {
+		static const struct v4l2_event eos = { .type = V4L2_EVENT_EOS };
+
+		v4l2_event_queue_fh(&ctx->fh, &eos);
+	}
+}
+
+static const struct vb2_ops ave_qops = {
+	.queue_setup		= ave_queue_setup,
+	.buf_out_validate	= ave_buf_out_validate,
+	.buf_prepare		= ave_buf_prepare,
+	.buf_queue		= ave_buf_queue,
+	.start_streaming	= ave_start_streaming,
+	.stop_streaming		= ave_stop_streaming,
+};
+
+static int ave_queue_init(void *priv, struct vb2_queue *src,
+			  struct vb2_queue *dst)
+{
+	struct ave_ctx *ctx = priv;
+	struct vb2_queue *q[] = { src, dst };
+	unsigned int i;
+	int ret;
+
+	for (i = 0; i < ARRAY_SIZE(q); i++) {
+		q[i]->type = i ? V4L2_BUF_TYPE_VIDEO_CAPTURE :
+				 V4L2_BUF_TYPE_VIDEO_OUTPUT;
+		q[i]->io_modes = VB2_MMAP | VB2_DMABUF;
+		q[i]->drv_priv = ctx;
+		q[i]->buf_struct_size = sizeof(struct v4l2_m2m_buffer);
+		q[i]->ops = &ave_qops;
+		q[i]->mem_ops = &vb2_dma_contig_memops;
+		q[i]->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY;
+		/*
+		 * The node's mutex, which is also the vfd lock the other
+		 * ioctls (S_FMT, ENCODER_CMD, ...) run under: one lock for all
+		 * of a file's ioctls, as before docs/98 §12, whichever encoder
+		 * the file is bound to. Contexts are serialised against each
+		 * other by hw_mutex and owner, never by this.
+		 */
+		q[i]->lock = &ctx->nav->dev_mutex;
+		/*
+		 * Allocated through the bound encoder's own DMA ops: the IOVA
+		 * is a DART one, on that encoder's DART.
+		 */
+		q[i]->dev = ctx->av->ave->dev;
+		ret = vb2_queue_init(q[i]);
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Running a job                                                          */
+/* ---------------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------------- */
+/* B frames (docs/81 "V4L2 implementation")                               */
+/* ---------------------------------------------------------------------- */
+
+/* The @n-th buffer of a ready queue (0 = the head), or NULL; not removed. */
+static struct vb2_v4l2_buffer *ave_nth_buf(struct v4l2_m2m_queue_ctx *q, u32 n)
+{
+	struct vb2_v4l2_buffer *vb = NULL;
+	struct v4l2_m2m_buffer *b;
+	unsigned long flags;
+
+	spin_lock_irqsave(&q->rdy_spinlock, flags);
+	list_for_each_entry(b, &q->rdy_queue, list)
+		if (!n--) {
+			vb = &b->vb;
+			break;
+		}
+	spin_unlock_irqrestore(&q->rdy_spinlock, flags);
+	return vb;
+}
+
+/*
+ * What the planner would do now. The held sources are the head of the
+ * OUTPUT ready queue, oldest first; src[n_held] is the next new one (or
+ * NULL). Fills src[0..n_held].
+ */
+static enum ave_gop_act ave_b_next(struct ave_ctx *ctx,
+				   struct vb2_v4l2_buffer **src)
+{
+	struct v4l2_m2m_ctx *m2m = ctx->fh.m2m_ctx;
+	const struct ave_gop *g = &ctx->plan;
+	bool force;
+	u32 i;
+
+	if (g->n_held >= AVE_GOP_BATCH_MAX)
+		return AVE_GOP_NONE;	/* cannot happen: nb <= AVE_GOP_B_MAX */
+	for (i = 0; i <= g->n_held; i++)
+		src[i] = ave_nth_buf(&m2m->out_q_ctx, i);
+	if (g->n_held && !src[g->n_held - 1])
+		return AVE_GOP_NONE;	/* cannot happen: the held are queued */
+	if (!src[g->n_held])
+		return ave_gop_decide(g, false, false, g->n_held &&
+			v4l2_m2m_is_last_draining_src_buf(m2m, src[g->n_held - 1]));
+	force = ctx->force_key ||
+		(v4l2_test_key_every && ctx->frame_n &&
+		 !(ctx->frame_n % v4l2_test_key_every));
+	return ave_gop_decide(g, true, force,
+			      v4l2_m2m_is_last_draining_src_buf(m2m, src[g->n_held]));
+}
+
+/*
+ * m2m asks before every job. One-frame path: always (m2m has already seen a
+ * source and a destination). B frames: only when there is something to do
+ * and a CAPTURE buffer for every frame it will code.
+ */
+static int ave_job_ready(void *priv)
+{
+	struct ave_ctx *ctx = priv;
+	struct vb2_v4l2_buffer *src[AVE_GOP_BATCH_MAX];
+	enum ave_gop_act a;
+
+	if (!ctx->nb || !ctx->session)
+		return 1;
+	a = ave_b_next(ctx, src);
+	if (a == AVE_GOP_NONE)
+		return 0;
+	return v4l2_m2m_num_dst_bufs_ready(ctx->fh.m2m_ctx) >=
+	       max_t(u32, ave_gop_need(&ctx->plan, a), 1);
+}
+
+/*
+ * One batch to the firmware and its completions to CAPTURE, in completion
+ * (decode) order, each with the metadata of the source it came from; then
+ * the sources, in display order (batch order).
+ */
+static void ave_b_batch(struct ave_ctx *ctx, const struct ave_gop_batch *b,
+			struct vb2_v4l2_buffer **src)
+{
+	struct ave_v4l2 *av = ctx->av;
+	struct v4l2_m2m_ctx *m2m = ctx->fh.m2m_ctx;
+	struct vb2_v4l2_buffer *dst[AVE_GOP_BATCH_MAX], *s, *d;
+	struct ave_enc_frame fr[AVE_GOP_BATCH_MAX];
+	struct ave_enc_out out[AVE_GOP_BATCH_MAX];
+	bool coded[AVE_GOP_BATCH_MAX] = {}, last = false;
+	u32 i, k, n_out = 0;
+	int ret;
+
+	for (i = 0; i < b->n; i++) {
+		dma_addr_t luma;
+
+		s = src[b->f[i].src];
+		luma = vb2_dma_contig_plane_dma_addr(&s->vb2_buf, 0);
+		fr[i] = (struct ave_enc_frame){
+			.fn = b->f[i].fn, .type = b->f[i].type, .luma = luma,
+			.chroma = luma + (dma_addr_t)ctx->bytesperline * ctx->height,
+			.stride = ctx->bytesperline,
+		};
+		/* job_ready counted them; the work re-checked */
+		dst[i] = ave_nth_buf(&m2m->cap_q_ctx, i);
+		out[i] = (struct ave_enc_out){
+			.buf = vb2_plane_vaddr(&dst[i]->vb2_buf, 0),
+			.size = vb2_plane_size(&dst[i]->vb2_buf, 0),
+		};
+	}
+
+	mutex_lock(&av->hw_mutex);
+	ret = ctx->session ?
+		ave_enc_encode_batch(av->ave, fr, b->n, out, &n_out) : -EIO;
+	mutex_unlock(&av->hw_mutex);
+	/*
+	 * After the encode, as the one-frame path does: a STOP that arrived
+	 * meanwhile names one of these sources as the last (f66).
+	 */
+	for (i = 0; i < b->n; i++)
+		last |= v4l2_m2m_is_last_draining_src_buf(m2m, src[b->f[i].src]);
+	if (ret) {
+		dev_err(av->ave->dev,
+			"v4l2: batch of %u from frameNumber %u failed after %u completion(s): %d\n",
+			b->n, b->f[0].fn, n_out, ret);
+		/* No later frame can succeed: tell the client now (EPOLLERR) */
+		if (av->ave->fw_hung || ctx->pm_lost) {
+			vb2_queue_error(v4l2_m2m_get_src_vq(m2m));
+			vb2_queue_error(v4l2_m2m_get_dst_vq(m2m));
+		}
+	}
+
+	/*
+	 * CAPTURE in completion order; frames that did not complete follow,
+	 * empty and in error, so every source still has its buffer.
+	 */
+	for (k = 0; k < b->n; k++) {
+		const bool ok = k < n_out;
+
+		i = 0;
+		if (ok)
+			i = out[k].frame;
+		else
+			while (i < b->n - 1 && coded[i])
+				i++;
+		coded[i] = true;
+		s = src[b->f[i].src];
+		d = dst[k];
+		d->sequence = ctx->cap_seq++;
+		v4l2_m2m_buf_copy_metadata(s, d);
+		d->field = V4L2_FIELD_NONE;
+		vb2_set_plane_payload(&d->vb2_buf, 0, ok ? out[k].len : 0);
+		d->flags &= ~(V4L2_BUF_FLAG_KEYFRAME | V4L2_BUF_FLAG_PFRAME |
+			      V4L2_BUF_FLAG_BFRAME);
+		if (ok)
+			d->flags |= out[k].type == AVE_GOP_IDR ?
+					V4L2_BUF_FLAG_KEYFRAME :
+				    out[k].type == AVE_GOP_B ?
+					V4L2_BUF_FLAG_BFRAME : V4L2_BUF_FLAG_PFRAME;
+		/* the drain's last frame in decode order carries LAST */
+		if (last && k == b->n - 1) {
+			static const struct v4l2_event eos = { .type = V4L2_EVENT_EOS };
+
+			d->flags |= V4L2_BUF_FLAG_LAST;
+			v4l2_event_queue_fh(&ctx->fh, &eos);
+			v4l2_m2m_mark_stopped(m2m);
+		}
+		v4l2_m2m_dst_buf_remove_by_buf(m2m, d);
+		v4l2_m2m_buf_done(d, ok ? VB2_BUF_STATE_DONE : VB2_BUF_STATE_ERROR);
+	}
+	for (i = 0; i < b->n; i++) {
+		bool ok = false;
+
+		for (k = 0; k < n_out; k++)
+			ok |= out[k].frame == i;
+		s = src[b->f[i].src];
+		v4l2_m2m_src_buf_remove_by_buf(m2m, s);
+		v4l2_m2m_buf_done(s, ok ? VB2_BUF_STATE_DONE : VB2_BUF_STATE_ERROR);
+	}
+}
+
+/* The B-frame job: hold one source, or code a batch (two: a forced IDR). */
+static void ave_run_work_b(struct ave_ctx *ctx)
+{
+	struct v4l2_m2m_ctx *m2m = ctx->fh.m2m_ctx;
+	struct vb2_v4l2_buffer *src[AVE_GOP_BATCH_MAX];
+	struct ave_gop_batch b[2];
+	enum ave_gop_act a;
+	u32 nbat, i;
+
+	a = ave_b_next(ctx, src);
+	/* job_ready said yes; a forced key may have changed the plan since */
+	if (a == AVE_GOP_NONE ||
+	    v4l2_m2m_num_dst_bufs_ready(m2m) <
+	    max_t(u32, ave_gop_need(&ctx->plan, a), 1))
+		return;
+	if (a != AVE_GOP_CLOSE) {
+		/* the new source, numbered in display order */
+		src[ctx->plan.n_held]->sequence = ctx->out_seq++;
+		ctx->frame_n++;
+	}
+	if (a == AVE_GOP_KEY)
+		ctx->force_key = false;
+	nbat = ave_gop_commit(&ctx->plan, a, b);
+	for (i = 0; i < nbat; i++)
+		ave_b_batch(ctx, &b[i], src);
+}
+
+static void ave_run_work(struct work_struct *work)
+{
+	struct ave_ctx *ctx = container_of(work, struct ave_ctx, run_work);
+	struct ave_v4l2 *av = ctx->av;
+	struct v4l2_m2m_ctx *m2m = ctx->fh.m2m_ctx;
+	struct vb2_v4l2_buffer *src, *dst;
+	enum vb2_buffer_state state = VB2_BUF_STATE_DONE;
+	dma_addr_t luma;
+	size_t len = 0;
+	bool key = false, idr;
+	int ret;
+
+	if (ctx->nb && ctx->session) {
+		ave_run_work_b(ctx);
+		goto finish;
+	}
+
+	/*
+	 * Peek, and take the buffers off the ready queues only when the frame
+	 * is done. Removing the source up front let an ENCODER_CMD(STOP) that
+	 * arrived mid-frame see no pending source and hand back an empty LAST
+	 * buffer ahead of the real last frame, which ffmpeg then never read
+	 * (f66: 59 of 60 frames).
+	 */
+	src = v4l2_m2m_next_src_buf(m2m);
+	dst = v4l2_m2m_next_dst_buf(m2m);
+	if (!src || !dst)
+		goto finish;
+
+	idr = !ctx->frame_n || ctx->force_key ||
+	      (ctx->gop && !(ctx->frame_n % ctx->gop));
+	luma = vb2_dma_contig_plane_dma_addr(&src->vb2_buf, 0);
+
+	mutex_lock(&av->hw_mutex);
+	ret = ctx->session ?
+		ave_enc_encode(av->ave, ctx->frame_n, idr, luma,
+			       luma + (dma_addr_t)ctx->bytesperline * ctx->height,
+			       ctx->bytesperline,
+			       vb2_plane_vaddr(&dst->vb2_buf, 0),
+			       vb2_plane_size(&dst->vb2_buf, 0), &len, &key) :
+		-EIO;
+	mutex_unlock(&av->hw_mutex);
+	if (ret) {
+		dev_err(av->ave->dev, "v4l2: frame %u failed: %d\n",
+			ctx->frame_n, ret);
+		state = VB2_BUF_STATE_ERROR;
+		len = 0;
+		/* No later frame can succeed: tell the client now (EPOLLERR) */
+		if (av->ave->fw_hung || ctx->pm_lost) {
+			vb2_queue_error(v4l2_m2m_get_src_vq(m2m));
+			vb2_queue_error(v4l2_m2m_get_dst_vq(m2m));
+		}
+	} else {
+		ctx->force_key = false;
+		ctx->frame_n++;
+	}
+
+	src->sequence = ctx->out_seq++;
+	dst->sequence = ctx->cap_seq++;
+	v4l2_m2m_buf_copy_metadata(src, dst);
+	dst->field = V4L2_FIELD_NONE;
+	vb2_set_plane_payload(&dst->vb2_buf, 0, len);
+	dst->flags &= ~(V4L2_BUF_FLAG_KEYFRAME | V4L2_BUF_FLAG_PFRAME);
+	dst->flags |= key ? V4L2_BUF_FLAG_KEYFRAME : V4L2_BUF_FLAG_PFRAME;
+	if (v4l2_m2m_is_last_draining_src_buf(m2m, src)) {
+		static const struct v4l2_event eos = { .type = V4L2_EVENT_EOS };
+
+		dst->flags |= V4L2_BUF_FLAG_LAST;
+		v4l2_event_queue_fh(&ctx->fh, &eos);
+		v4l2_m2m_mark_stopped(m2m);
+	}
+	v4l2_m2m_src_buf_remove(m2m);
+	v4l2_m2m_dst_buf_remove(m2m);
+	v4l2_m2m_buf_done(src, state);
+	v4l2_m2m_buf_done(dst, state);
+finish:
+	v4l2_m2m_job_finish(av->m2m_dev, m2m);
+}
+
+static void ave_device_run(void *priv)
+{
+	struct ave_ctx *ctx = priv;
+
+	queue_work(ctx->av->wq, &ctx->run_work);
+}
+
+static const struct v4l2_m2m_ops ave_m2m_ops = {
+	.device_run = ave_device_run,
+	.job_ready = ave_job_ready,
+};
+
+/* ---------------------------------------------------------------------- */
+/* File operations                                                        */
+/* ---------------------------------------------------------------------- */
+
+/*
+ * docs/98 §12. Encoders open_balance may move a context between: the same
+ * firmware and ABI, so the same formats, sizes, controls and ranges.
+ */
+static bool ave_v4l2_compatible(const struct ave_v4l2 *a,
+				const struct ave_v4l2 *b)
+{
+	const char *fa = a->ave->soc->fw_name, *fb = b->ave->soc->fw_name;
+
+	return a->ave->fw_abi == b->ave->fw_abi &&
+	       fa && fb && !strcmp(fa, fb) &&
+	       a->hevc == b->hevc && a->two_refs == b->two_refs &&
+	       a->h264_two_refs == b->h264_two_refs;
+}
+
+/*
+ * No context bound, and not hung or being re-probed (a re-probe frees the
+ * ave_v4l2; ave_schedule_recover() sets recover_scheduled under the list
+ * lock from ave_v4l2_unbind(), and the PM paths set fw_hung before they
+ * look at ave_v4l2_idle(), which takes it). List lock held.
+ */
+static bool ave_v4l2_free(const struct ave_v4l2 *av)
+{
+	return !av->ctxs && !READ_ONCE(av->ave->fw_hung) &&
+	       !READ_ONCE(av->ave->recover_scheduled);
+}
+
+/*
+ * The encoder an open of @nav's node is bound to: its own while free, else
+ * the free compatible encoder with the lowest index, else its own (today's
+ * behaviour: STREAMON gets -EBUSY while another stream runs there). Counts
+ * the context and the file. Sets *why for the log when it moves.
+ */
+static struct ave_v4l2 *ave_v4l2_bind(struct ave_v4l2 *nav, const char **why)
+{
+	struct ave_v4l2 *av = nav, *it;
+
+	*why = NULL;
+	mutex_lock(&ave_v4l2_list_lock);
+	if (open_balance && !ave_v4l2_free(nav)) {
+		list_for_each_entry(it, &ave_v4l2_list, list) {
+			if (it == nav || !ave_v4l2_free(it) ||
+			    !ave_v4l2_compatible(nav, it))
+				continue;
+			if (av == nav || it->ave->soc->inst < av->ave->soc->inst)
+				av = it;
+		}
+		if (av != nav)
+			*why = nav->ctxs ? "busy" : "hung";
+	}
+	av->ctxs++;
+	av->users++;
+	nav->users++;
+	mutex_unlock(&ave_v4l2_list_lock);
+	return av;
+}
+
+/*
+ * Undoes ave_v4l2_bind(). The last user of a hung encoder - a context bound
+ * to it, or a file on its node - starts its re-probe (docs/84 §5), under the
+ * list lock so that no open binds to it in between.
+ */
+static void ave_v4l2_unbind(struct ave_v4l2 *nav, struct ave_v4l2 *av)
+{
+	mutex_lock(&ave_v4l2_list_lock);
+	av->ctxs--;
+	av->users--;
+	nav->users--;
+	if (!av->users && READ_ONCE(av->ave->fw_hung))
+		ave_schedule_recover(av->ave);
+	if (nav != av && !nav->users && READ_ONCE(nav->ave->fw_hung))
+		ave_schedule_recover(nav->ave);
+	mutex_unlock(&ave_v4l2_list_lock);
+}
+
+static int ave_open(struct file *file)
+{
+	struct ave_v4l2 *nav = video_drvdata(file), *av;
+	struct ave_ctx *ctx;
+	const char *why;
+	int ret;
+
+	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+	if (!ctx)
+		return -ENOMEM;
+	/* Before the controls and the m2m context: both depend on it. */
+	av = ave_v4l2_bind(nav, &why);
+	if (why)
+		dev_info_ratelimited(nav->ave->dev,
+				     "v4l2: %s %s; this open uses %s\n",
+				     nav->vfd.name, why, av->vfd.name);
+	ctx->av = av;
+	ctx->nav = nav;
+	INIT_WORK(&ctx->run_work, ave_run_work);
+	ctx->width = AVE_DEF_W;
+	ctx->height = AVE_DEF_H;
+	ctx->crop = (struct v4l2_rect){ 0, 0, AVE_DEF_W, AVE_DEF_H };
+	ctx->bytesperline = ALIGN(AVE_DEF_W, 64);
+	ctx->out_size = ave_out_size(AVE_ENC_CODEC_H264, ctx->bytesperline,
+				     AVE_DEF_H);
+	ctx->cap_size = ave_cap_size(AVE_DEF_W, AVE_DEF_H);
+	ctx->timeperframe = (struct v4l2_fract){ 1, 30 };
+	ctx->colorspace = V4L2_COLORSPACE_REC709;
+	ctx->ycbcr_enc = V4L2_YCBCR_ENC_DEFAULT;
+	ctx->quantization = V4L2_QUANTIZATION_DEFAULT;
+	ctx->xfer_func = V4L2_XFER_FUNC_DEFAULT;
+	ctx->qp = AVE_DEF_QP;
+	ctx->codec = AVE_ENC_CODEC_H264;
+	ctx->out_fourcc = V4L2_PIX_FMT_NV12;
+	ctx->hevc_qp = AVE_DEF_QP;
+
+	v4l2_fh_init(&ctx->fh, video_devdata(file));
+	ret = ave_init_ctrls(ctx);
+	if (ret)
+		goto err_fh;
+	ctx->fh.m2m_ctx = v4l2_m2m_ctx_init(av->m2m_dev, ctx, ave_queue_init);
+	if (IS_ERR(ctx->fh.m2m_ctx)) {
+		ret = PTR_ERR(ctx->fh.m2m_ctx);
+		goto err_ctrl;
+	}
+	v4l2_fh_add(&ctx->fh, file);
+	return 0;
+
+err_ctrl:
+	v4l2_ctrl_handler_free(&ctx->hdl);
+err_fh:
+	v4l2_fh_exit(&ctx->fh);
+	kfree(ctx);
+	ave_v4l2_unbind(nav, av);
+	return ret;
+}
+
+static int ave_release(struct file *file)
+{
+	struct ave_ctx *ctx = fh_to_ctx(file);
+	struct ave_v4l2 *av = ctx->av, *nav = ctx->nav;
+
+	mutex_lock(&nav->dev_mutex);		/* the queues' lock */
+	v4l2_m2m_ctx_release(ctx->fh.m2m_ctx);	/* stops both queues */
+	mutex_unlock(&nav->dev_mutex);
+	ave_end_session(ctx);
+	v4l2_ctrl_handler_free(&ctx->hdl);
+	v4l2_fh_del(&ctx->fh, file);
+	v4l2_fh_exit(&ctx->fh);
+	kfree(ctx);
+	/*
+	 * A hung firmware is reset by re-probing the device, which tears down
+	 * this V4L2 device: only once nobody holds it open (docs/84 §5).
+	 */
+	ave_v4l2_unbind(nav, av);
+	return 0;
+}
+
+static const struct v4l2_file_operations ave_fops = {
+	.owner		= THIS_MODULE,
+	.open		= ave_open,
+	.release	= ave_release,
+	.poll		= v4l2_m2m_fop_poll,
+	.unlocked_ioctl	= video_ioctl2,
+	.mmap		= v4l2_m2m_fop_mmap,
+};
+
+/* ---------------------------------------------------------------------- */
+/* Registration                                                           */
+/* ---------------------------------------------------------------------- */
+
+int ave_v4l2_register(struct ave_device *ave)
+{
+	struct ave_v4l2 *av;
+	int ret;
+
+	av = kzalloc(sizeof(*av), GFP_KERNEL);
+	if (!av)
+		return -ENOMEM;
+	av->ave = ave;
+	av->hevc = ave_enc_hevc_supported(ave);
+	/* the controls' ranges: what either codec can do; H.264 is clamped at STREAMON */
+	av->two_refs = ave_enc_two_refs_supported(ave, av->hevc ? AVE_ENC_CODEC_HEVC :
+						  AVE_ENC_CODEC_H264);
+	av->h264_two_refs = ave_enc_two_refs_supported(ave, AVE_ENC_CODEC_H264);
+	INIT_LIST_HEAD(&av->list);
+	if (!av->h264_two_refs)
+		dev_info(ave->dev, "v4l2: H.264 B frames and two-reference P frames off on %s (docs/89 §9): an H.264 stream is clamped to IPPP; HEVC has them\n",
+			 ave->soc->name);
+	mutex_init(&av->dev_mutex);
+	mutex_init(&av->hw_mutex);
+	av->wq = alloc_ordered_workqueue("apple-ave", 0);
+	if (!av->wq) {
+		ret = -ENOMEM;
+		goto err_free;
+	}
+
+	ret = v4l2_device_register(ave->dev, &av->v4l2_dev);
+	if (ret)
+		goto err_wq;
+	av->m2m_dev = v4l2_m2m_init(&ave_m2m_ops);
+	if (IS_ERR(av->m2m_dev)) {
+		ret = PTR_ERR(av->m2m_dev);
+		goto err_v4l2;
+	}
+
+	av->vfd = (struct video_device) {
+		.fops		= &ave_fops,
+		.ioctl_ops	= &ave_ioctl_ops,
+		.release	= video_device_release_empty,
+		.lock		= &av->dev_mutex,
+		.v4l2_dev	= &av->v4l2_dev,
+		.vfl_dir	= VFL_DIR_M2M,
+		.device_caps	= V4L2_CAP_VIDEO_M2M | V4L2_CAP_STREAMING,
+	};
+	/*
+	 * encoder 0 keeps the name tools/ave-load.sh and v4l2-test.sh grep for;
+	 * the others are apple-ave1-enc .. apple-ave3-enc (t6002, docs/98)
+	 */
+	if (ave->soc->inst)
+		snprintf(av->vfd.name, sizeof(av->vfd.name), "apple-ave%u-enc",
+			 ave->soc->inst);
+	else
+		strscpy(av->vfd.name, "apple-ave-enc", sizeof(av->vfd.name));
+	video_set_drvdata(&av->vfd, av);
+	ret = video_register_device(&av->vfd, VFL_TYPE_VIDEO, -1);
+	if (ret)
+		goto err_m2m;
+
+	ave->v4l2 = av;
+	/* Last: from here an open of another encoder's node may bind here. */
+	mutex_lock(&ave_v4l2_list_lock);
+	list_add_tail(&av->list, &ave_v4l2_list);
+	mutex_unlock(&ave_v4l2_list_lock);
+	dev_info(ave->dev, "v4l2: %s encoder at /dev/video%d\n",
+		 av->hevc ? "H.264/HEVC" : "H.264", av->vfd.num);
+	return 0;
+
+err_m2m:
+	v4l2_m2m_release(av->m2m_dev);
+err_v4l2:
+	v4l2_device_unregister(&av->v4l2_dev);
+err_wq:
+	destroy_workqueue(av->wq);
+err_free:
+	kfree(av);
+	return ret;
+}
+
+/* ---------------------------------------------------------------------- */
+/* System sleep (docs/86)                                                 */
+/* ---------------------------------------------------------------------- */
+
+/*
+ * Stop scheduling jobs, wait out the one running (its Process is bounded by
+ * the session timeout), then end the open stream: Stop + Close while the
+ * firmware is still up. Returns with hw_mutex HELD, so nothing reaches the
+ * session layer while ave_drv.c halts and releases the core; the caller
+ * drops it with ave_v4l2_pm_unlock().
+ *
+ * The stream is failed, not resumed: after the sleep its session is gone
+ * with the firmware that held it, and a new IDR on a new session would be a
+ * different stream than the one the client configured and started.
+ */
+void ave_v4l2_pm_quiesce(struct ave_device *ave)
+{
+	struct ave_v4l2 *av = ave->v4l2;
+	struct ave_ctx *ctx;
+	int ret;
+
+	if (!av)
+		return;
+	/* Not under hw_mutex: the running job's work item takes it. */
+	v4l2_m2m_suspend(av->m2m_dev);
+	flush_workqueue(av->wq);
+	mutex_lock(&av->hw_mutex);
+	ctx = av->owner;
+	if (!ctx)
+		return;
+	ret = ave_enc_stop(ave);
+	dev_warn(ave->dev,
+		 "pm: system suspend during a stream: session ended (Stop/Close %d); the stream fails with EIO - stop both queues and start again after resume\n",
+		 ret);
+	/*
+	 * ctx is still alive: its release clears owner under hw_mutex (in
+	 * ave_end_session) before its m2m context is freed.
+	 */
+	ctx->session = false;
+	ctx->pm_lost = true;
+	av->owner = NULL;
+	vb2_queue_error(v4l2_m2m_get_src_vq(ctx->fh.m2m_ctx));
+	vb2_queue_error(v4l2_m2m_get_dst_vq(ctx->fh.m2m_ctx));
+}
+
+/* The resume boot holds the session layer the same way. */
+void ave_v4l2_pm_lock(struct ave_device *ave)
+{
+	if (ave->v4l2)
+		mutex_lock(&ave->v4l2->hw_mutex);
+}
+
+void ave_v4l2_pm_unlock(struct ave_device *ave)
+{
+	if (ave->v4l2)
+		mutex_unlock(&ave->v4l2->hw_mutex);
+}
+
+/* Once per ave_v4l2_pm_quiesce(), after the core is back (or given up on). */
+void ave_v4l2_pm_resume(struct ave_device *ave)
+{
+	if (ave->v4l2)
+		v4l2_m2m_resume(ave->v4l2->m2m_dev);
+}
+
+/*
+ * No open file handle on this node and no context bound to this encoder
+ * (docs/98 §12): a re-probe cannot pull the device from under one.
+ */
+bool ave_v4l2_idle(struct ave_device *ave)
+{
+	bool idle;
+
+	mutex_lock(&ave_v4l2_list_lock);
+	idle = !ave->v4l2 || !ave->v4l2->users;
+	mutex_unlock(&ave_v4l2_list_lock);
+	return idle;
+}
+
+void ave_v4l2_unregister(struct ave_device *ave)
+{
+	struct ave_v4l2 *av = ave->v4l2;
+
+	if (!av)
+		return;
+	/* First: no open of another node binds here any more. */
+	mutex_lock(&ave_v4l2_list_lock);
+	list_del_init(&av->list);
+	if (av->users)
+		dev_warn(ave->dev,
+			 "v4l2: unregistering with %u user(s) (open files on this node, contexts bound to this encoder)\n",
+			 av->users);
+	mutex_unlock(&ave_v4l2_list_lock);
+	video_unregister_device(&av->vfd);
+	v4l2_m2m_release(av->m2m_dev);
+	v4l2_device_unregister(&av->v4l2_dev);
+	destroy_workqueue(av->wq);
+	ave->v4l2 = NULL;
+	kfree(av);
+}

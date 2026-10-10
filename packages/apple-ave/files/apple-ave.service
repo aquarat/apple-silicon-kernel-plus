@@ -1,0 +1,17 @@
+[Unit]
+Description=Apple AVE hardware video encoder (experimental)
+Documentation=file:///usr/share/doc/apple-ave/README.md
+After=systemd-modules-load.service systemd-udev-trigger.service local-fs.target
+ConditionPathExists=/proc/device-tree/compatible
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/apple-ave/ave-load
+# Stop the encoder cleanly before reboot or power-off. If a client still
+# holds the device, the unload fails, which is harmless.
+ExecStop=-/usr/libexec/apple-ave/ave-load unload
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
