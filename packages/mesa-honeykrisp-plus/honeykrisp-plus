@@ -1,0 +1,11 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Run a command with the mesa-honeykrisp-plus Vulkan driver instead of the
+# system one:  honeykrisp-plus <command> [args...]
+# Without a command, print the VK_DRIVER_FILES value.
+ICD=@ICD@
+if [ $# -eq 0 ]; then
+    echo "VK_DRIVER_FILES=$ICD"
+    exit 0
+fi
+VK_DRIVER_FILES=$ICD exec "$@"

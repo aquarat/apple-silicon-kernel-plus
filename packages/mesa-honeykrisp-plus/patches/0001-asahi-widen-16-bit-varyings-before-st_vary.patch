@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: aquarat <3090997+aquarat@users.noreply.github.com>
+Date: Thu, 08 Oct 2026 00:24:44 +0000
+Subject: [PATCH 1/2] asahi: widen 16-bit varyings before st_vary
+
+UVS slots are 32-bit: st_vary only takes 32-bit sources, and the fragment
+shader reads varyings as 32-bit values and converts them after
+interpolation (agx_nir_lower_interpolation). A 16-bit vertex output, such
+as a half varying from SPIR-V Float16 (Metal shaders translated to
+SPIR-V), reached st_vary as a 16-bit source, and the backend aborted the
+process that compiled the pipeline (value.size == AGX_SIZE_32).
+
+Widen 16-bit outputs to 32 bits by their type before st_vary: f2f32 for
+floats, i2i32 for signed and u2u32 for other integers.
+
+Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
+---
+diff --git a/src/asahi/lib/agx_nir_lower_uvs.c b/src/asahi/lib/agx_nir_lower_uvs.c
+index 75d3c0d..ce6b9b1 100644
+--- a/src/asahi/lib/agx_nir_lower_uvs.c
++++ b/src/asahi/lib/agx_nir_lower_uvs.c
+@@ -64,6 +64,25 @@ lower(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+    nir_def *value = intr->src[0].ssa;
+    nir_def *offset = intr->src[1].ssa;
+ 
++   /* UVS slots are 32-bit (st_vary only takes 32-bit sources), and the
++    * fragment shader reads varyings as 32-bit and converts after
++    * interpolation (agx_nir_lower_interpolation). Widen 16-bit outputs
++    * (e.g. half varyings from SPIR-V Float16) according to their type.
++    */
++   if (value->bit_size == 16) {
++      switch (nir_alu_type_get_base_type(nir_intrinsic_src_type(intr))) {
++      case nir_type_float:
++         value = nir_f2f32(b, value);
++         break;
++      case nir_type_int:
++         value = nir_i2i32(b, value);
++         break;
++      default:
++         value = nir_u2u32(b, value);
++         break;
++      }
++   }
++
+    /* If there is only 1 user varying, it is at the base of the varying section.
+     * This saves us an indirection on simple separate shaders.
+     */

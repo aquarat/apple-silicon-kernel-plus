@@ -164,6 +164,8 @@ build_mesa() {
     cp "$HERE/packages/$pkg/$pkg.spec" "$spec"
     fetch_checked "$spec"
     cp "$HERE"/packages/"$pkg"/patches/*.patch "$top/SOURCES/"
+    find "$HERE/packages/$pkg" -maxdepth 1 -type f ! -name '*.spec' ! -name sha256sums \
+        ! -name README.md -exec cp {} "$top/SOURCES/" \;
     finish "$spec"
 }
 
