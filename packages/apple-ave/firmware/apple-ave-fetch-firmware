@@ -1,0 +1,802 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: GPL-2.0-only
+"""Make the Apple AVE encoder's firmware files for this Mac, verify them, install them.
+
+No Apple firmware or data taken from Apple's files is shipped with
+apple-ave. Everything the driver needs is made here, on the user's machine,
+from the user's own copy of Apple's files:
+
+  apple/ave_<variant>.bin        the encoder firmware: the payload of
+                                 Firmware/ave/AppleAVE2FW_<variant>.im4p
+  apple/ave-13.5-dpe-<set>.bin   the AVE_DPE register tunables macOS applies,
+                                 read from AppleAVE2.kext in a kernelcache
+                                 (ave_fwgen.py)
+  apple/ave-13.5-h13g-data-pristine.bin
+                                 (M1 only) the firmware's DATA as the boot
+                                 loader leaves it, built from the image
+
+Where Apple's files come from, in this order:
+
+  * the Asahi installer's copy of this Mac's kernelcache on the EFI system
+    partition (asahi/kernelcache.release.*), when it is the 13.5 one;
+  * --from-dir DIR: a directory holding the files, such as a mounted macOS
+    13.5 Preboot volume (Asahi's stub included) or a copy of one;
+  * --ipsw FILE: a local copy of Apple's macOS 13.5 (22G74) restore image;
+  * by default, that image on Apple's CDN, read in place with HTTP range
+    requests, as Asahi Linux's installer does: only the members needed
+    (about 0.5 MB, and about 26 MB for the kernelcache unless the EFI
+    partition has it), never the 13 GB image.
+
+Every input and output is checked against known-hashes.txt (sha256) before
+anything is written. A file that does not match is not installed.
+
+The pristine DATA blob for the other SoCs is not in any file the user has:
+the boot loader writes part of it. The driver keeps it at the first start
+of each boot and offers it in debugfs; --capture checks it against the
+image and installs it (ave-load does that after loading the driver).
+
+Usage:
+  apple-ave-fetch-firmware                 detect the SoC, show the plan, ask, install
+  apple-ave-fetch-firmware --dry-run       show the plan only (no network, no writes)
+  apple-ave-fetch-firmware --yes           do not ask (for automation)
+  apple-ave-fetch-firmware --check         report what is installed (exit 1 if incomplete)
+  apple-ave-fetch-firmware --capture       install the pristine DATA the driver kept
+  apple-ave-fetch-firmware --ipsw FILE     read a local IPSW instead of the CDN
+  apple-ave-fetch-firmware --from-dir DIR  search DIR for the files
+  apple-ave-fetch-firmware --output-dir D  write into D instead of /lib/firmware (no root)
+
+Exit status: 0 done (or nothing to do), 1 error, 2 usage, 3 declined.
+"""
+import argparse
+import glob
+import hashlib
+import os
+import struct
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+import zlib
+
+
+def _import_fwgen():
+    here = os.path.dirname(os.path.abspath(__file__))
+    for d in (os.environ.get("APPLE_AVE_LIBDIR"), here, "/usr/share/apple-ave"):
+        if d and os.path.exists(os.path.join(d, "ave_fwgen.py")):
+            sys.path.insert(0, d)
+            break
+    import ave_fwgen
+    return ave_fwgen
+
+
+G = _import_fwgen()
+Refused = G.Refused
+DERError = G.DERError
+im4p_payload = G.im4p_payload
+
+VERSION = "1.0"
+
+# The system firmware Asahi's installer sets up, and the image it comes from.
+# The same URL is in the Asahi installer's log of every 13.5 stub install.
+IPSW_VERSION = "13.5"
+IPSW_BUILD = "22G74"
+IPSW_SIZE = 12893195726
+IPSW_URL = ("https://updates.cdn-apple.com/2023SummerFCS/fullrestores/032-69606/"
+            "D3E05CDF-E105-434C-A4A1-4E3DC7668DD0/UniversalMac_13.5_22G74_Restore.ipsw")
+
+HASHES = os.environ.get("APPLE_AVE_KNOWN_HASHES",
+                        "/usr/share/apple-ave/firmware/known-hashes.txt")
+FIRMWARE_DIR = "/lib/firmware"
+DT = os.environ.get("APPLE_AVE_DT", "/proc/device-tree")
+ESP_DIRS = ("/boot/efi/asahi", "/boot/asahi", "/efi/asahi")
+DEBUGFS = os.environ.get("APPLE_AVE_DEBUGFS", "/sys/kernel/debug")
+
+# ---------------------------------------------------------------------------
+# Per SoC: the firmware variant (the IPSW BuildManifest maps every board of a
+# SoC to one), the kernelcache that SoC boots (any 13.5 kernelcache holds the
+# same AppleAVE2.kext, so any of them gives the same tables), the AVE_DPE
+# set, and where the pristine DATA comes from.
+# ---------------------------------------------------------------------------
+H13D_PRISTINE = {0: "apple/ave-13.5-h13d-data-pristine.bin",
+                 1: "apple/ave-13.5-h13d-ave1-data-pristine.bin",
+                 2: "apple/ave-13.5-h13d-ave2-data-pristine.bin",
+                 3: "apple/ave-13.5-h13d-ave3-data-pristine.bin"}
+
+SOCS = {
+    "t6000": dict(name="M1 Pro", variant="H13S", kc="kernelcache.release.mac13j",
+                  dpe="Castor_6000", pristine={0: "apple/ave-13.5-h13s-data-pristine.bin"}),
+    "t6001": dict(name="M1 Max", variant="H13C", kc="kernelcache.release.mac13j",
+                  dpe="Castor_6000", pristine={0: "apple/ave-13.5-data-pristine.bin"}),
+    "t6002": dict(name="M1 Ultra", variant="H13D", kc="kernelcache.release.mac13j",
+                  dpe="Castor_6000", pristine=H13D_PRISTINE),
+    "t8103": dict(name="M1", variant="H13G", kc="kernelcache.release.mac13g",
+                  dpe="Acis_8103", pristine={0: "apple/ave-13.5-h13g-data-pristine.bin"},
+                  # iBoot's DATA lies in Linux's RAM on these machines, so the
+                  # driver builds DATA itself from this blob: the image with
+                  # this SoC's register addresses and the image's own empty
+                  # tunables table (AVE repo docs/89 §6). STKG is a stack
+                  # cookie, any value works; this one keeps the blob identical
+                  # to the one tested on hardware.
+                  built=dict(STKG=0x9FE20CD1E87CAA00, SOC_=0x8103, SOCR=0x11,
+                             CpAd=0x267800000, WrAd=0x267C00000, IOBA=0x0,
+                             tunables=None)),
+    "t8112": dict(name="M2", variant="H14G", kc="kernelcache.release.mac14g",
+                  dpe="Atlas_8112", pristine={0: "apple/ave-13.5-h14g-data-pristine.bin"}),
+}
+KERNELCACHES = ("kernelcache.release.mac13j", "kernelcache.release.mac13g",
+                "kernelcache.release.mac14g")
+
+
+def ave_member(variant):
+    return f"Firmware/ave/AppleAVE2FW_{variant}.im4p"
+
+
+member_name = ave_member
+
+
+def image_name(variant):
+    return f"apple/ave_{variant.lower()}.bin"
+
+
+# ---------------------------------------------------------------------------
+# known-hashes.txt: "sha256  path  [size=N]  comment". Paths under apple/ are
+# installed files; "ipsw:<member>" lines are IPSW members (with their size).
+# ---------------------------------------------------------------------------
+def load_hashes(path):
+    known = {}
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) < 2 or len(parts[0]) != 64:
+                raise ValueError(f"{path}: malformed line: {line!r}")
+            int(parts[0], 16)
+            size = None
+            for p in parts[2:]:
+                if p.startswith("size="):
+                    size = int(p[5:])
+            known[parts[1]] = (parts[0].lower(), size)
+    return known
+
+
+def sha256(b):
+    return hashlib.sha256(b).hexdigest()
+
+
+def check_hash(known, path, data, what=None):
+    """Raise Refused unless sha256(data) is the one listed for path."""
+    if path not in known:
+        raise Refused(f"{path} is not listed in known-hashes.txt")
+    want, size = known[path]
+    have = sha256(data)
+    if size is not None and len(data) != size:
+        raise Refused(f"{what or path}: {len(data)} bytes, expected {size}")
+    if have != want:
+        raise Refused(f"{what or path}: sha256 {have}, expected {want}")
+    return have
+
+
+def inner_im4p(buf):
+    """The IM4P inside an IMG4 (a personalized copy on a Preboot volume), or buf."""
+    tag, vs, ve = G.der_read(buf, 0)
+    kids = G.der_children(buf, vs, ve)
+    if kids and kids[0][0] == 0x16 and buf[kids[0][2]:kids[0][3]] == b"IMG4" and len(kids) > 1:
+        return bytes(buf[kids[1][1]:kids[1][3]])
+    return bytes(buf)
+
+
+# ---------------------------------------------------------------------------
+# A ZIP reader over any random-access source: a local file, or HTTP range
+# requests. Only what an IPSW uses: ZIP64, stored or deflated members.
+# ---------------------------------------------------------------------------
+class FileSource:
+    def __init__(self, path):
+        self.path = path
+        self.f = open(path, "rb")
+        self.f.seek(0, os.SEEK_END)
+        self.size = self.f.tell()
+        self.fetched = 0
+
+    def read(self, off, n):
+        self.f.seek(off)
+        b = self.f.read(n)
+        if len(b) != n:
+            raise Refused(f"{self.path}: short read at {off}")
+        self.fetched += n
+        return b
+
+    def close(self):
+        self.f.close()
+
+
+class HTTPSource:
+    """Range requests with retries: Apple's CDN drops long range sessions."""
+
+    def __init__(self, url, retries=5, timeout=60, log=None):
+        self.url = url
+        self.retries = retries
+        self.timeout = timeout
+        self.fetched = 0
+        self.log = log or (lambda m: None)
+        self.size = self._size()
+
+    def _open(self, rng):
+        req = urllib.request.Request(self.url, headers={
+            "Range": rng, "User-Agent": f"apple-ave-fetch-firmware/{VERSION}"})
+        return urllib.request.urlopen(req, timeout=self.timeout)
+
+    def _retry(self, what, fn):
+        delay = 2
+        for attempt in range(1, self.retries + 1):
+            try:
+                return fn()
+            except (urllib.error.URLError, OSError, ConnectionError) as e:
+                if isinstance(e, urllib.error.HTTPError) and e.code in (403, 404, 410):
+                    raise Refused(f"{self.url}: HTTP {e.code}") from e
+                if attempt == self.retries:
+                    raise Refused(f"{what}: {e}") from e
+                self.log(f"  {what}: {type(e).__name__}, retrying in {delay} s")
+                time.sleep(delay)
+                delay *= 2
+
+    def _size(self):
+        def go():
+            with self._open("bytes=0-0") as r:
+                cr = r.headers.get("Content-Range", "")
+                if r.status != 206 or "/" not in cr:
+                    raise Refused(f"{self.url}: the server does not answer range requests")
+                return int(cr.rsplit("/", 1)[1])
+        return self._retry("size of the image", go)
+
+    def read(self, off, n):
+        def go():
+            with self._open(f"bytes={off}-{off + n - 1}") as r:
+                if r.status != 206:
+                    raise Refused(f"{self.url}: HTTP {r.status} to a range request")
+                b = r.read()
+            if len(b) != n:
+                raise OSError(f"short range read ({len(b)} of {n} bytes)")
+            return b
+        b = self._retry(f"bytes {off}+{n}", go)
+        self.fetched += n
+        return b
+
+    def close(self):
+        pass
+
+
+class ZipMember:
+    __slots__ = ("name", "method", "csize", "usize", "crc", "lho")
+
+
+class RemoteZip:
+    EOCD = b"PK\x05\x06"
+    Z64LOC = b"PK\x06\x07"
+    Z64EOCD = b"PK\x06\x06"
+    CDH = b"PK\x01\x02"
+    LFH = b"PK\x03\x04"
+
+    def __init__(self, src):
+        self.src = src
+        self.members = {}
+        self.dir_bytes = 0
+        self._read_directory()
+
+    def _read_directory(self):
+        s = self.src
+        tail_n = min(s.size, 65536 + 22)
+        tail = s.read(s.size - tail_n, tail_n)
+        i = tail.rfind(self.EOCD)
+        if i < 0 or i + 22 > len(tail):
+            raise Refused("not a zip file (no end-of-directory record)")
+        (_, disk, _, n_here, n_total, cd_size, cd_off, _) = struct.unpack_from(
+            "<4sHHHHIIH", tail, i)
+        if disk not in (0, 0xFFFF):
+            raise Refused("multi-disk zip files are not supported")
+        if 0xFFFFFFFF in (cd_size, cd_off) or 0xFFFF in (n_total,):
+            j = i - 20
+            if j < 0 or tail[j:j + 4] != self.Z64LOC:
+                raise Refused("ZIP64 end-of-directory locator missing")
+            z64_off = struct.unpack_from("<Q", tail, j + 8)[0]
+            rec = s.read(z64_off, 56)
+            if rec[:4] != self.Z64EOCD:
+                raise Refused("bad ZIP64 end-of-directory record")
+            n_total, cd_size, cd_off = struct.unpack_from("<QQQ", rec, 32)
+        if cd_size > 64 * 1024 * 1024 or cd_off + cd_size > s.size:
+            raise Refused("implausible zip directory")
+        cd = s.read(cd_off, cd_size)
+        self.dir_bytes = tail_n + cd_size
+        off = 0
+        for _ in range(n_total):
+            if cd[off:off + 4] != self.CDH:
+                raise Refused("bad zip directory entry")
+            (method, crc, csize, usize, nlen, xlen, clen, lho) = struct.unpack_from(
+                "<10xH4xIIIHHH8xI", cd, off)
+            name = cd[off + 46:off + 46 + nlen].decode("utf-8", "replace")
+            extra = cd[off + 46 + nlen:off + 46 + nlen + xlen]
+            vals = {"usize": usize, "csize": csize, "lho": lho}
+            x = 0
+            while x + 4 <= len(extra):
+                hid, hlen = struct.unpack_from("<HH", extra, x)
+                if hid == 1:
+                    k = x + 4
+                    for f in ("usize", "csize", "lho"):
+                        if vals[f] == 0xFFFFFFFF and k + 8 <= x + 4 + hlen:
+                            vals[f] = struct.unpack_from("<Q", extra, k)[0]
+                            k += 8
+                x += 4 + hlen
+            m = ZipMember()
+            m.name, m.method, m.crc = name, method, crc
+            m.csize, m.usize, m.lho = vals["csize"], vals["usize"], vals["lho"]
+            self.members[name] = m
+            off += 46 + nlen + xlen + clen
+
+    def read(self, name, max_size=64 * 1024 * 1024):
+        m = self.members.get(name)
+        if m is None:
+            raise Refused(f"the image has no member {name}")
+        if m.usize > max_size or m.csize > max_size:
+            raise Refused(f"{name}: implausible size {m.usize}")
+        lfh = self.src.read(m.lho, 30)
+        if lfh[:4] != self.LFH:
+            raise Refused(f"{name}: bad local header")
+        nlen, xlen = struct.unpack_from("<HH", lfh, 26)
+        data = self.src.read(m.lho + 30 + nlen + xlen, m.csize)
+        if m.method == 0:
+            out = data
+        elif m.method == 8:
+            d = zlib.decompressobj(-15)
+            out = d.decompress(data, m.usize + 1) + d.flush()
+        else:
+            raise Refused(f"{name}: zip method {m.method} is not supported")
+        if len(out) != m.usize or zlib.crc32(out) & 0xFFFFFFFF != m.crc:
+            raise Refused(f"{name}: size or CRC does not match the zip directory")
+        return out
+
+
+# ---------------------------------------------------------------------------
+# This machine
+# ---------------------------------------------------------------------------
+def dt_strings(path):
+    try:
+        with open(path, "rb") as f:
+            return [s.decode("ascii", "replace") for s in f.read().split(b"\0") if s]
+    except OSError:
+        return []
+
+
+def detect():
+    """(soc, board, os-fw-version) from the device tree; None where unknown."""
+    compat = dt_strings(os.path.join(DT, "compatible"))
+    soc = next((c.split(",", 1)[1] for c in compat
+                if c.startswith("apple,t") and c[7:].isdigit()), None)
+    board = next((c.split(",", 1)[1] for c in compat
+                  if c.startswith("apple,j")), None)
+    fw = dt_strings(os.path.join(DT, "chosen", "asahi,os-fw-version"))
+    return soc, board, (fw[0] if fw else None)
+
+
+def human(n):
+    for unit in ("bytes", "KB", "MB", "GB"):
+        if n < 1000 or unit == "GB":
+            return f"{n} {unit}" if unit == "bytes" else f"{n:.1f} {unit}"
+        n /= 1000.0
+    return str(n)
+
+
+def read_file(path, limit=256 * 1024 * 1024):
+    with open(path, "rb") as f:
+        return f.read(limit)
+
+
+# ---------------------------------------------------------------------------
+# The plan
+# ---------------------------------------------------------------------------
+class Plan:
+    def __init__(self, soc, known, dest):
+        if soc not in SOCS:
+            raise Refused(f"no AVE support for SoC {soc!r} (supported: {', '.join(sorted(SOCS))})")
+        self.soc = soc
+        self.s = SOCS[soc]
+        self.known = known
+        self.dest = dest
+        self.ave_key = "ipsw:" + ave_member(self.s["variant"])
+        self.kc_key = "ipsw:" + self.s["kc"]
+        for k in (self.ave_key, self.kc_key):
+            if k not in known or known[k][1] is None:
+                raise Refused(f"known-hashes.txt has no size and sha256 for {k}")
+        self.image = image_name(self.s["variant"])
+        self.dpe = G.dpe_file_name(self.s["dpe"])
+        self.built = self.s["pristine"][0] if self.s.get("built") else None
+        self.outputs = [self.image, self.dpe] + ([self.built] if self.built else [])
+        self.captured = [] if self.built else sorted(set(self.s["pristine"].values()))
+
+    def path(self, p):
+        return os.path.join(self.dest, p)
+
+    def installed(self):
+        """{path: state}: 'ok' | 'absent' | 'MISMATCH' for made files; for the
+        captured blobs 'ok' (checked against the image) | 'not yet' | 'INVALID'."""
+        out = {}
+        for p in self.outputs:
+            f = self.path(p)
+            if not os.path.exists(f):
+                out[p] = "absent"
+            else:
+                out[p] = "ok" if sha256(read_file(f)) == self.known.get(p, ("",))[0] else "MISMATCH"
+        for inst, p in sorted(self.s["pristine"].items()):
+            if p in out:
+                continue
+            f = self.path(p)
+            if not os.path.exists(f):
+                out[p] = "not yet"
+                continue
+            try:
+                G.check_pristine(read_file(self.path(self.image)), read_file(f), self.soc, inst)
+                out[p] = "ok"
+            except (Refused, OSError):
+                out[p] = "INVALID"
+        return out
+
+    def complete(self, state=None):
+        state = state or self.installed()
+        return all(state[p] == "ok" for p in self.outputs)
+
+    def describe(self, source, local_kc):
+        s = self.s
+        ave_size = self.known[self.ave_key][1]
+        kc_size = self.known[self.kc_key][1]
+        lines = [f"SoC {self.soc} ({s['name']}): AVE firmware {s['variant']}, DPE tunables "
+                 f"{s['dpe']}, from macOS {IPSW_VERSION} ({IPSW_BUILD})"]
+        if local_kc:
+            lines.append(f"Kernelcache: {local_kc} (on this machine; no download)")
+        if source["kind"] == "url":
+            need = [f"{ave_member(s['variant'])} (at most {human(ave_size)}; stored compressed)"]
+            if not local_kc:
+                need.append(f"{s['kc']} ({human(kc_size)})")
+            lines += ["Source: Apple's restore image, read in place with HTTP range requests:",
+                      f"  {source['where']}",
+                      "Download: " + " and ".join(need) +
+                      f", plus the image's zip directory (about 0.2 MB); not the whole "
+                      f"{human(IPSW_SIZE)} image"]
+        elif source["kind"] == "ipsw":
+            lines.append(f"Source: the local IPSW {source['where']}")
+        else:
+            lines.append(f"Source: the files under {source['where']}")
+        lines.append("Checks: every Apple file and every file made from it, against "
+                     "known-hashes.txt (sha256)")
+        lines.append("Writes: " + ", ".join(self.path(p) for p in self.outputs))
+        if self.captured:
+            lines.append("Later: the pristine DATA blob, which the driver keeps at its first "
+                         "load of a boot (--capture; ave-load runs it)")
+        return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
+def local_kernelcache(known):
+    """A known 13.5 kernelcache on the EFI system partition (the Asahi
+    installer's copy of this Mac's), or None. Any 13.5 kernelcache carries
+    the same AppleAVE2.kext."""
+    want = {known[k][0]: k for k in ("ipsw:" + n for n in KERNELCACHES) if k in known}
+    for d in ESP_DIRS:
+        for f in sorted(glob.glob(os.path.join(d, "kernelcache.release.*"))):
+            try:
+                if os.path.getsize(f) > 64 * 1024 * 1024:
+                    continue
+                if sha256(read_file(f)) in want:
+                    return f
+            except OSError:
+                continue
+    return None
+
+
+def find_in_dir(root, names, max_depth=12):
+    """Files under root whose name (lower case) is one of names."""
+    names = {n.lower() for n in names}
+    found = []
+    root = os.path.abspath(root)
+    base = root.count(os.sep)
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        if dirpath.count(os.sep) - base >= max_depth:
+            dirnames[:] = []
+        for fn in filenames:
+            if fn.lower() in names:
+                found.append(os.path.join(dirpath, fn))
+    return sorted(found)
+
+
+class Sources:
+    """IPSW members (IM4P bytes) for a plan, each checked against its sha256."""
+
+    def __init__(self, args, plan, log):
+        self.args, self.plan, self.log = args, plan, log
+        self.zip = None
+        self.src = None
+
+    def _zip(self):
+        if self.zip is None:
+            if self.args.ipsw:
+                self.src = FileSource(self.args.ipsw)
+            else:
+                self.log(f"Reading the zip directory of {self.args.url}")
+                self.src = HTTPSource(self.args.url, log=self.log)
+            self.zip = RemoteZip(self.src)
+        return self.zip
+
+    def close(self):
+        if self.src:
+            self.log(f"  {human(self.src.fetched)} read from the image in total")
+            self.src.close()
+
+    def _from_dir(self, names, keys):
+        want = {self.plan.known[k][0]: k for k in keys}
+        reasons = []
+        for c in find_in_dir(self.args.from_dir, names):
+            try:
+                b = inner_im4p(read_file(c))
+            except (Refused, OSError) as e:
+                reasons.append(f"{c}: {e}")
+                continue
+            if sha256(b) in want:
+                self.log(f"  {c}: the {IPSW_VERSION} {want[sha256(b)][5:]}")
+                return b
+            reasons.append(f"{c}: not the macOS {IPSW_VERSION} file")
+        raise Refused(f"none of {', '.join(names)} under {self.args.from_dir} is usable" +
+                      ("".join("\n  " + r for r in reasons)))
+
+    def _from_zip(self, key):
+        member = key[5:]
+        z = self._zip()
+        m = z.members.get(member)
+        if m is None:
+            raise Refused(f"{member} is not in this image: is it macOS {IPSW_VERSION} ({IPSW_BUILD})?")
+        if m.usize != self.plan.known[key][1]:
+            raise Refused(f"{member} is {m.usize} bytes here, {self.plan.known[key][1]} in macOS "
+                          f"{IPSW_VERSION}: not the expected image")
+        self.log(f"Reading {member} ({human(m.csize)})")
+        b = z.read(member, max_size=128 * 1024 * 1024)
+        check_hash(self.plan.known, key, b, member)
+        return b
+
+    def ave_im4p(self):
+        p = self.plan
+        if self.args.from_dir:
+            return self._from_dir([f"AppleAVE2FW_{p.s['variant']}.im4p", "AVE.img4"], [p.ave_key])
+        return self._from_zip(p.ave_key)
+
+    def kernelcache(self, local):
+        p = self.plan
+        keys = ["ipsw:" + n for n in KERNELCACHES if "ipsw:" + n in p.known]
+        if local:
+            b = read_file(local)
+            self.log(f"Kernelcache: {local}")
+            return b
+        if self.args.from_dir:
+            return self._from_dir(list(KERNELCACHES) + ["kernelcache"], keys)
+        return self._from_zip(p.kc_key)
+
+
+def make_files(plan, args, log, local_kc=None):
+    """{path: bytes} for this SoC, every one checked. Nothing is written here."""
+    src = Sources(args, plan, log)
+    try:
+        im4p = src.ave_im4p()
+        kc_im4p = src.kernelcache(local_kc)
+    finally:
+        src.close()
+    fourcc, image = im4p_payload(im4p)
+    check_hash(plan.known, plan.image, image)
+    log(f"  {plan.image}: sha256 OK")
+    out = {plan.image: image}
+
+    kc = G.Kernelcache(G.kernelcache_macho(kc_im4p))
+    dpe = G.dpe_encode(G.dpe_tables(kc, plan.s["dpe"]))
+    check_hash(plan.known, plan.dpe, dpe)
+    log(f"  {plan.dpe}: {plan.s['dpe']} from AppleAVE2.kext, sha256 OK")
+    out[plan.dpe] = dpe
+
+    if plan.built:
+        blob = G.build_pristine(image, plan.s["built"])
+        check_hash(plan.known, plan.built, blob)
+        log(f"  {plan.built}: built from the image, sha256 OK")
+        out[plan.built] = blob
+    return out
+
+
+def install(files, dest, log):
+    for p, b in files.items():
+        f = os.path.join(dest, p)
+        os.makedirs(os.path.dirname(f), exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(f), prefix=".apple-ave-")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(b)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, f)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
+        log(f"installed {f}")
+    if dest == FIRMWARE_DIR and os.path.exists("/usr/sbin/restorecon"):
+        os.system("/usr/sbin/restorecon -R " + os.path.join(dest, "apple") + " >/dev/null 2>&1")
+
+
+def capture(plan, log, err, force=False):
+    """Install the pristine DATA the driver kept this boot (debugfs)."""
+    files = sorted(glob.glob(os.path.join(DEBUGFS, "apple_ave*_iboot_data")))
+    if not files:
+        err("nothing to capture: no apple_ave*_iboot_data in debugfs (the driver keeps "
+            "DATA at its first load of a boot; is apple-ave loaded, debugfs mounted?)")
+        return 1
+    try:
+        image = read_file(plan.path(plan.image))
+        check_hash(plan.known, plan.image, image)
+    except (OSError, Refused) as e:
+        err(f"the firmware image is needed to check the copy: {e}")
+        return 1
+    out, rc = {}, 0
+    for f in files:
+        tail = os.path.basename(f)[len("apple_ave"):-len("_iboot_data")]
+        inst = int(tail) if tail else 0
+        name = plan.s["pristine"].get(inst)
+        if not name or plan.built:
+            continue
+        try:
+            blob = read_file(f)
+            v = G.check_pristine(image, blob, plan.soc, inst)
+        except (OSError, Refused) as e:
+            err(f"{f}: {e}; not installed")
+            rc = 1
+            continue
+        target = plan.path(name)
+        if os.path.exists(target) and not force:
+            try:
+                G.check_pristine(image, read_file(target), plan.soc, inst)
+                log(f"{target}: already in place and valid; kept")
+                continue
+            except (OSError, Refused):
+                pass
+        log(f"{f}: this boot's cold DATA (SOC_ {v['SOC_']:#x}, SOCR {v['SOCR']:#x}, "
+            f"{v['tunables']} tunables), checked against the image")
+        out[name] = blob
+    if out:
+        install(out, plan.dest, log)
+    return rc
+
+
+def parse_args(argv):
+    ap = argparse.ArgumentParser(
+        prog="apple-ave-fetch-firmware",
+        description="Make the AVE encoder's firmware files for this Mac from Apple's macOS "
+                    f"{IPSW_VERSION} files, verify them, and install them.",
+        epilog="Nothing is downloaded or written without --yes or a 'y' at the prompt.")
+    src = ap.add_mutually_exclusive_group()
+    src.add_argument("--url", default=IPSW_URL, help="the IPSW URL (default: Apple's 13.5 image)")
+    src.add_argument("--ipsw", metavar="FILE", help="a local copy of the 13.5 IPSW")
+    src.add_argument("--from-dir", metavar="DIR",
+                     help="search DIR for AppleAVE2FW_<variant>.im4p (or AVE.img4) and a "
+                          "13.5 kernelcache (e.g. a mounted macOS 13.5 Preboot volume)")
+    ap.add_argument("--soc", help="SoC to make the files for (default: this machine's)")
+    ap.add_argument("--output-dir", metavar="DIR",
+                    help=f"write the files under DIR/apple/ instead of {FIRMWARE_DIR}")
+    ap.add_argument("--hashes", default=None, help="known-hashes.txt to use")
+    ap.add_argument("--no-local-kernelcache", action="store_true",
+                    help="do not use the kernelcache on the EFI system partition")
+    ap.add_argument("-n", "--dry-run", action="store_true",
+                    help="print the plan and exit; no network access, nothing written")
+    ap.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation")
+    ap.add_argument("--check", action="store_true",
+                    help="report the installed files; exit 1 if any is missing or wrong")
+    ap.add_argument("--capture", action="store_true",
+                    help="install the pristine DATA blob the driver kept this boot")
+    ap.add_argument("--force", action="store_true",
+                    help="redo even if the files are in place, or the system firmware is not 13.5")
+    ap.add_argument("-q", "--quiet", action="store_true", help="only print errors")
+    ap.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
+    return ap.parse_args(argv)
+
+
+def default_hashes():
+    here = os.path.dirname(os.path.abspath(__file__))
+    for p in (HASHES, os.path.join(here, "known-hashes.txt")):
+        if os.path.exists(p):
+            return p
+    return HASHES
+
+
+def main(argv=None):
+    a = parse_args(sys.argv[1:] if argv is None else argv)
+    log = (lambda m: None) if a.quiet else (lambda m: print(m, flush=True))
+
+    def err(m):
+        print(f"apple-ave-fetch-firmware: {m}", file=sys.stderr, flush=True)
+
+    try:
+        known = load_hashes(a.hashes or default_hashes())
+    except (OSError, ValueError) as e:
+        err(f"cannot read known-hashes.txt: {e}")
+        return 1
+
+    soc, board, osfw = detect()
+    if a.soc:
+        soc = a.soc
+    if not soc:
+        err("cannot tell this machine's SoC from the device tree; give --soc")
+        return 2
+    dest = a.output_dir or FIRMWARE_DIR
+    try:
+        plan = Plan(soc, known, dest)
+    except Refused as e:
+        err(str(e))
+        return 1
+
+    if a.check:
+        state = plan.installed()
+        for p, st in state.items():
+            print(f"{st:8s} {plan.path(p)}")
+        return 0 if plan.complete(state) else 1
+
+    if (a.capture or dest == FIRMWARE_DIR) and not a.dry_run and os.geteuid() != 0 \
+            and not a.output_dir:
+        err(f"run as root to install into {FIRMWARE_DIR} (or use --output-dir)")
+        return 1
+
+    if a.capture:
+        return capture(plan, log, err, a.force)
+
+    if not a.soc and osfw != IPSW_VERSION:
+        msg = (f"this Mac's system firmware is {osfw or 'unknown'} "
+               f"(asahi,os-fw-version), the driver supports {IPSW_VERSION} only")
+        if not a.force:
+            err(msg + "; nothing to do (--force makes the files anyway)")
+            return 1
+        log("warning: " + msg)
+
+    source = ({"kind": "dir", "where": a.from_dir} if a.from_dir else
+              {"kind": "ipsw", "where": a.ipsw} if a.ipsw else
+              {"kind": "url", "where": a.url})
+    if plan.complete() and not a.force:
+        log(f"The {soc} files are installed and verified in {dest}; nothing to do.")
+        return 0
+    local_kc = None if (a.no_local_kernelcache or a.from_dir or a.ipsw) else local_kernelcache(known)
+    log(plan.describe(source, local_kc))
+    if board:
+        log(f"This machine: {board}" + (f", system firmware {osfw}" if osfw else ""))
+    if a.dry_run:
+        log("Dry run: nothing downloaded or written.")
+        return 0
+    if not a.yes:
+        if not sys.stdin.isatty():
+            err("not on a terminal: rerun with --yes to proceed without asking")
+            return 3
+        try:
+            ans = input("Proceed? [y/N] ").strip().lower()
+        except EOFError:
+            ans = ""
+        if ans not in ("y", "yes"):
+            log("Nothing done.")
+            return 3
+    try:
+        files = make_files(plan, a, log, local_kc)
+        install(files, dest, log)
+    except Refused as e:
+        err(f"{e}\nNothing was installed.")
+        return 1
+    except OSError as e:
+        err(f"{e}\nNothing was installed (or only some files; rerun to finish).")
+        return 1
+    if dest == FIRMWARE_DIR:
+        log("Done. Start the encoder with: sudo systemctl enable --now apple-ave.service")
+    else:
+        log(f"Done. To install these files later: sudo /usr/libexec/apple-ave/install-firmware {dest}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

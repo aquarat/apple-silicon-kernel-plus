@@ -103,10 +103,17 @@ differs from `packages/apple-avd/src`. If it differs:
 `packages/apple-ave/src` is the AVE repository's `driver/` and `test/`
 (renamed `overlay/`) at the commit in the spec, without `physdump.c`,
 `isp_peek.c`, `psdump/` and the `.disabled` overlay, and with those modules
-removed from `overlay/Makefile`. To update: copy the new commit's trees the
-same way, update `ave_commit`, `Version`, the changelog, and
-`firmware/known-hashes.txt` if the driver's firmware hashes changed. If the
-SoC rows changed, update `files/ave-load` and the README tables.
+removed from `overlay/Makefile`; `firmware/ave_fwgen.py` is its
+`tools/ave_fwgen.py`. To update: copy the new commit's trees the same way,
+update `ave_commit`, `Version`, the changelog, and
+`firmware/known-hashes.txt` if the files the driver loads changed. If the
+SoC rows changed, update `files/ave-load`, `SOCS` in
+`firmware/apple-ave-fetch-firmware` and the README tables.
+
+Before committing, check that no Apple data came along: no generated
+table (`ave_dpe_tables.h` and the like), no firmware, no blob. The driver
+loads everything Apple-derived at run time (upstream docs/100), and
+`python3 -m unittest discover -s packages/apple-ave/tests` must pass.
 
 ## Adding a Mesa patch
 

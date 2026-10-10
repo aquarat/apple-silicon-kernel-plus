@@ -12,4 +12,6 @@ Filters = [
     # Nothing to test at build time: DKMS builds on the target.
     'no-%check-section',
     'empty-%postun',
+    # apple-ave-fetch-firmware documents itself (--help, apple-ave-firmware.md).
+    'no-manual-page-for-binary apple-ave-fetch-firmware',
 ]

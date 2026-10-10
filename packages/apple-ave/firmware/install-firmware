@@ -1,22 +1,24 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
-# Install Apple AVE firmware files that the user extracted for their own Mac,
-# refusing any file whose sha256 is not in known-hashes.txt.
+# Install Apple AVE firmware files that the user made for their own Mac by
+# hand, refusing any file whose sha256 is not in known-hashes.txt. Most users
+# want apple-ave-fetch-firmware instead, which makes and installs them.
 #
 #   install-firmware DIR        DIR/<file> or DIR/apple/<file> -> /lib/firmware/apple/<file>
 #   install-firmware --check    report what /lib/firmware has
 #
-# How to make the files: /usr/share/doc/apple-ave/README.md (Firmware).
+# How to make the files: /usr/share/doc/apple-ave/apple-ave-firmware.md.
 # Run as root to install. Nothing is downloaded.
 set -euo pipefail
 LIST=${KNOWN_HASHES:-/usr/share/apple-ave/firmware/known-hashes.txt}
 [ -f "$LIST" ] || LIST=$(cd "$(dirname "$0")" && pwd)/known-hashes.txt
 DEST=${FIRMWARE_DIR:-/lib/firmware}
 
-known() { grep -v '^#' "$LIST" | awk -v p="$1" '$2 == p {print $1}'; }
+# Only the installable lines (apple/...); "ipsw:" lines describe IPSW members.
+known() { grep -v '^#' "$LIST" | awk -v p="$1" '$2 == p && $2 ~ /^apple\// {print $1}'; }
 
 if [ "${1:-}" = --check ]; then
-    grep -v '^#' "$LIST" | awk 'NF {print $2}' | while read -r p; do
+    grep -v '^#' "$LIST" | awk 'NF && $2 ~ /^apple\// {print $2}' | while read -r p; do
         f=$DEST/$p
         if [ -e "$f" ]; then
             s=$(sha256sum "$f" | cut -d' ' -f1)

@@ -1,9 +1,10 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # Load the Apple AVE encoder (apple-ave.service), unload it, or show its state.
-# EXPERIMENTAL: see /usr/share/doc/apple-ave/README.md.
+# See /usr/share/doc/apple-ave/README.md.
 #
-#   ave-load            load the SoC's overlay, then apple-ave; wait for /dev/videoN
+#   ave-load            load the SoC's overlay, then apple-ave; wait for /dev/videoN;
+#                       then keep the pristine DATA the driver copied (--capture)
 #   ave-load unload     unload apple-ave (the overlay stays: it cannot be removed)
 #   ave-load status
 #   ave-load modprobe-hook [options]
@@ -11,21 +12,25 @@
 #                       this script load ave-overlay
 #
 # Per SoC (the root node's first "apple,tNNNN" compatible):
-#   t6000 (M1 Pro)    overlay variant=8, firmware H13S
-#   t8103 (M1)        overlay variant=9, firmware H13G; H.264 is limited to
-#                     I and P frames on this SoC (the driver enforces it)
-#   t8112 (M2)        overlay variant=10, firmware H14G
-#   t6001 (M1 Max)    overlay variant=7, firmware H13C; only with
-#                     /etc/apple-ave/allow-t6001 (needs an m1n1 that programs
-#                     the encoder's DAPF; see the README)
-#   t6002 (M1 Ultra)  overlay variant=11, firmware H13D; only with
-#                     /etc/apple-ave/allow-t6002 (the firmware placement is
-#                     per machine; see the README)
+#   t6000 (M1 Pro)    overlay variant=8, firmware H13S, DPE Castor_6000
+#   t8103 (M1)        overlay variant=9, firmware H13G, DPE Acis_8103; H.264 is
+#                     limited to I and P frames on this SoC (the driver enforces it)
+#   t8112 (M2)        overlay variant=10, firmware H14G, DPE Atlas_8112
+#   t6001 (M1 Max)    overlay variant=7 (both encoders), firmware H13C; only with
+#                     /etc/apple-ave/allow-t6001 (README: not yet run on stock m1n1).
+#                     Until the pristine DATA has been kept once, variant=4 (the
+#                     first encoder only): the second one is built from it
+#   t6002 (M1 Ultra)  overlay variant=11 (the first encoder), firmware H13D; only
+#                     with /etc/apple-ave/allow-t6002 (README)
 #   anything else     no port yet: exits 0 without loading anything
+#
+# The files are made on this machine by apple-ave-fetch-firmware; nothing is
+# downloaded here. If they are missing, this says so and loads nothing.
 set -u
 LOG() { echo "ave-load: $*"; }
 NODES='^apple-ave[0-9]?-enc$'
 FW=/lib/firmware
+FETCH=/usr/bin/apple-ave-fetch-firmware
 
 case "${1:-}" in
 modprobe-hook)
@@ -41,6 +46,7 @@ status)
     for n in /sys/class/video4linux/video*/name; do
         grep -qE "$NODES" "$n" 2>/dev/null && echo "$(cat "$n"): /dev/$(basename "$(dirname "$n")")"
     done
+    [ -x "$FETCH" ] && "$FETCH" --check
     exit 0
     ;;
 unload)
@@ -54,43 +60,78 @@ esac
 
 soc=$(tr '\0' '\n' < /proc/device-tree/compatible | grep -m1 -E '^apple,t[0-9]+$' | cut -d, -f2)
 osfw=$(tr -d '\0' < /proc/device-tree/chosen/asahi,os-fw-version 2>/dev/null)
+# need: files without which nothing loads. pristine: the blob a driver-owned
+# DATA is built from (needed at load); others are kept after the load.
+pristine=
 case "$soc" in
-t6000) variant=8;  fw=apple/ave_h13s.bin; pristine=apple/ave-13.5-h13s-data-pristine.bin; want=1 ;;
-t8103) variant=9;  fw=apple/ave_h13g.bin; pristine=apple/ave-13.5-h13g-data-pristine.bin; want=1 ;;
-t8112) variant=10; fw=apple/ave_h14g.bin; pristine=apple/ave-13.5-h14g-data-pristine.bin; want=1 ;;
-t6001) variant=7;  fw=apple/ave_h13c.bin; pristine=apple/ave-13.5-data-pristine.bin;      want=2 ;;
-t6002) variant=11; fw=apple/ave_h13d.bin; pristine=apple/ave-13.5-h13d-data-pristine.bin; want=1 ;;
+t6000) variant=8;  want=1; need="apple/ave_h13s.bin apple/ave-13.5-dpe-castor_6000.bin" ;;
+t8103) variant=9;  want=1; need="apple/ave_h13g.bin apple/ave-13.5-dpe-acis_8103.bin apple/ave-13.5-h13g-data-pristine.bin" ;;
+t8112) variant=10; want=1; need="apple/ave_h14g.bin apple/ave-13.5-dpe-atlas_8112.bin" ;;
+t6001) variant=7;  want=2; need="apple/ave_h13c.bin apple/ave-13.5-dpe-castor_6000.bin"
+       pristine=apple/ave-13.5-data-pristine.bin ;;
+t6002) variant=11; want=1; need="apple/ave_h13d.bin apple/ave-13.5-dpe-castor_6000.bin" ;;
 *) LOG "no AVE support for SoC '${soc:-unknown}'; nothing to do"; exit 0 ;;
 esac
 case "$soc" in
 t6001|t6002)
     [ -e "/etc/apple-ave/allow-$soc" ] || {
-        LOG "$soc needs per-machine preparation first (README); not loading"; exit 0; } ;;
+        LOG "$soc is not enabled by default yet (README: Supported SoCs); not loading"; exit 0; } ;;
 esac
 
-# The driver's firmware placement and DATA are those of the macOS 13.5
-# system firmware that Asahi's installer sets up. Other versions are refused.
+# The driver's tables are for the macOS 13.5 system firmware that Asahi's
+# installer sets up. Other versions are refused.
 if [ "$osfw" != 13.5 ]; then
     LOG "os-fw-version is '${osfw:-unknown}'; only 13.5 is supported; not loading"
     exit 0
 fi
-for f in $fw $pristine; do
-    [ -s "$FW/$f" ] || { LOG "missing $FW/$f (see the README: firmware); not loading"; exit 0; }
+for f in $need; do
+    [ -s "$FW/$f" ] || {
+        LOG "missing $FW/$f: run 'sudo apple-ave-fetch-firmware' (README: Firmware); not loading"
+        exit 0; }
 done
+# t6001: the second encoder builds its DATA from the first one's pristine
+# blob; until it has been kept (at the end of this script), only the first.
+if [ -n "$pristine" ] && [ ! -s "$FW/$pristine" ]; then
+    LOG "$FW/$pristine not kept yet: loading the first encoder only (both from the next boot)"
+    variant=4; want=1
+fi
 
 lsmod | grep -q '^apple_ave ' && { LOG "apple-ave is already loaded"; exec "$0" status; }
 
+# The PMP performance vote (README): only where the PMP runs (a DTB built
+# with the pmp alias), and only on t6000/t6001, where it is a speed-up.
+ov_opts="" drv_opts=""
+pmpnode=
+for d in /proc/device-tree/soc/pmp@*; do [ -d "$d" ] && { pmpnode=$d; break; }; done
+case "$soc" in
+t6000|t6001)
+    if [ -n "$pmpnode" ] && [ "$(tr -d '\0' < "$pmpnode/status" 2>/dev/null)" = okay ]; then
+        ov_opts="pmp_venc=1"
+        drv_opts="pmp_report=1 pmp_vote=0x2000000300000003"
+        LOG "the PMP is running: loading with the performance vote"
+    fi ;;
+esac
+
 modprobe -a videodev v4l2-mem2mem videobuf2-common videobuf2-v4l2 videobuf2-dma-contig || exit 1
 if ! lsmod | grep -q '^ave_overlay '; then
-    APPLE_AVE_LOAD=1 modprobe ave_overlay variant="$variant" || { LOG "the overlay failed to load"; exit 1; }
+    # shellcheck disable=SC2086
+    APPLE_AVE_LOAD=1 modprobe ave_overlay variant="$variant" $ov_opts ||
+        { LOG "the overlay failed to load"; exit 1; }
 fi
-modprobe apple_ave || { LOG "apple-ave failed to load; see dmesg"; exit 1; }
+# shellcheck disable=SC2086
+modprobe apple_ave $drv_opts || { LOG "apple-ave failed to load; see dmesg"; exit 1; }
 
 n=0
 for _ in $(seq 1 100); do
     n=$(grep -lE "$NODES" /sys/class/video4linux/video*/name 2>/dev/null | wc -l)
-    [ "$n" -ge "$want" ] && { LOG "loaded ($soc, variant=$variant)"; exec "$0" status; }
+    [ "$n" -ge "$want" ] && break
     sleep 0.1
 done
-LOG "apple-ave loaded, but only $n of $want encoder node(s) appeared; see dmesg"
-exit 1
+if [ "$n" -lt "$want" ]; then
+    LOG "apple-ave loaded, but only $n of $want encoder node(s) appeared; see dmesg"
+    exit 1
+fi
+LOG "loaded ($soc, variant=$variant)"
+# Keep this boot's pristine DATA for reloads in later boots (local, no network).
+[ -x "$FETCH" ] && "$FETCH" --capture --quiet 2>/dev/null
+exec "$0" status

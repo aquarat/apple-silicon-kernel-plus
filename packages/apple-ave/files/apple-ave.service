@@ -1,7 +1,10 @@
 [Unit]
-Description=Apple AVE hardware video encoder (experimental)
+Description=Apple AVE hardware video encoder
 Documentation=file:///usr/share/doc/apple-ave/README.md
 After=systemd-modules-load.service systemd-udev-trigger.service local-fs.target
+# Ordering only: if the user enabled apple-ave-fetch-firmware.service, the
+# files are made first. It is not pulled in from here.
+After=apple-ave-fetch-firmware.service
 ConditionPathExists=/proc/device-tree/compatible
 
 [Service]

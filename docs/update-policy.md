@@ -39,6 +39,9 @@ of response times.
 - Follows its upstream repository by hand. No schedule.
 - Only for the macOS 13.5 system firmware. Other system firmware versions are
   refused until upstream ports them.
+- The firmware files are made on each user's Mac by `apple-ave-fetch-firmware`
+  from Apple's 13.5 image; if Apple ever removes that image from its CDN,
+  `--ipsw` and `--from-dir` still work from local copies.
 
 ## mesa-honeykrisp-plus
 

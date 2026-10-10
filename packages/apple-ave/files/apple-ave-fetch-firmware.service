@@ -1,0 +1,18 @@
+[Unit]
+Description=Make the Apple AVE encoder's firmware files from Apple's macOS 13.5 files (opt-in)
+Documentation=file:///usr/share/doc/apple-ave/apple-ave-firmware.md
+# Enabled by the user only: it may download from Apple's CDN. When the files
+# are in place it does nothing and touches no network.
+Wants=network-online.target
+After=network-online.target
+Before=apple-ave.service
+ConditionPathExists=/proc/device-tree/compatible
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/apple-ave-fetch-firmware --yes
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

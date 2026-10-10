@@ -27,7 +27,13 @@ jobs:
             packages/apple-ave/files/ave-load packages/apple-ave/firmware/install-firmware \
             packages/mesa-honeykrisp-plus/honeykrisp-plus
       - name: Python scripts compile
-        run: python3 -m py_compile scripts/asahi-kernel.py scripts/kernel-watch.py
+        run: |
+          python3 -m py_compile scripts/asahi-kernel.py scripts/kernel-watch.py \
+            packages/apple-ave/firmware/ave_fwgen.py
+          python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' \
+            packages/apple-ave/firmware/apple-ave-fetch-firmware
+      - name: apple-ave tests (synthetic files, no network)
+        run: python3 -m unittest discover -s packages/apple-ave/tests -v
       - name: Specs parse (rpmspec -P)
         run: |
           for s in packages/*/*.spec; do
