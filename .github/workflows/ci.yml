@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Checks on every push and pull request. No secrets are used here.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04-arm
+    container: registry.fedoraproject.org/fedora:44
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install tools
+        run: container/install-tools.sh
+      - name: shellcheck
+        run: |
+          shellcheck -x scripts/*.sh container/install-tools.sh \
+            packages/apple-ave/files/ave-load packages/apple-ave/firmware/install-firmware \
+            packages/mesa-honeykrisp-plus/honeykrisp-plus
+      - name: Python scripts compile
+        run: python3 -m py_compile scripts/asahi-kernel.py scripts/kernel-watch.py
+      - name: Specs parse (rpmspec -P)
+        run: |
+          for s in packages/*/*.spec; do
+            echo "== $s"
+            rpmspec -P "$s" > /dev/null
+          done
+      - name: rpmlint (specs)
+        run: rpmlint -c packages/rpmlint.toml packages/*/*.spec
+
+  kernel-patches:
+    # Do the patches still apply to the kernel @asahi publishes now?
+    # Builds the kernel SRPM with an rpmbuild -bp check.
+    runs-on: ubuntu-24.04-arm
+    container: registry.fedoraproject.org/fedora:44
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install tools
+        run: container/install-tools.sh
+      - name: Kernel SRPM with prep check
+        run: PREP_CHECK=1 scripts/make-srpm.sh kernel out
+
+  srpms:
+    runs-on: ubuntu-24.04-arm
+    container: registry.fedoraproject.org/fedora:44
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [apple-avd, apple-ave, mesa-honeykrisp-plus, qemu-vmapple]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install tools
+        run: container/install-tools.sh
+      - name: Build SRPM
+        run: scripts/make-srpm.sh ${{ matrix.package }} out
+      - name: rpmlint (SRPM)
+        run: rpmlint -c packages/rpmlint.toml out/*.src.rpm
+      - name: Upload SRPM
+        if: matrix.package == 'apple-avd' || matrix.package == 'apple-ave'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: srpm-${{ matrix.package }}
+          path: out/*.src.rpm
+          retention-days: 7

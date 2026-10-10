@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Start COPR builds by hand: Actions > copr-build > Run workflow.
+# Uses the COPR_CONFIG secret (the contents of a copr-cli config file).
+name: copr-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Package to build"
+        type: choice
+        required: true
+        options:
+          - kernel
+          - apple-avd
+          - apple-ave
+          - mesa-honeykrisp-plus
+          - qemu-vmapple
+          - all
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.repository == 'aquarat/apple-silicon-kernel-plus'
+    runs-on: ubuntu-24.04
+    container: registry.fedoraproject.org/fedora:44
+    steps:
+      - name: Install copr-cli
+        run: dnf -y install --setopt=install_weak_deps=False copr-cli
+      - name: Write the copr-cli config
+        env:
+          COPR_CONFIG: ${{ secrets.COPR_CONFIG }}
+        run: |
+          test -n "$COPR_CONFIG" || { echo "::error::the COPR_CONFIG secret is not set"; exit 1; }
+          umask 077
+          mkdir -p "$HOME/.config"
+          printf '%s\n' "$COPR_CONFIG" > "$HOME/.config/copr"
+      - name: Start the build(s)
+        env:
+          PACKAGE: ${{ inputs.package }}
+        run: |
+          if [ "$PACKAGE" = all ]; then
+            set -- apple-avd apple-ave mesa-honeykrisp-plus qemu-vmapple kernel
+          else
+            set -- "$PACKAGE"
+          fi
+          for p in "$@"; do
+            case $p in kernel) t=72000 ;; qemu-vmapple) t=36000 ;; mesa-honeykrisp-plus) t=18000 ;; *) t=3600 ;; esac
+            echo "== $p"
+            copr-cli build-package aquarat/apple-silicon-kernel-plus --name "$p" --nowait --timeout "$t"
+          done
+      - name: Remove the config
+        if: always()
+        run: rm -f "$HOME/.config/copr"

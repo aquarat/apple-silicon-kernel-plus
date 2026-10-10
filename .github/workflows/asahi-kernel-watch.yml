@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Daily: when @asahi publishes a new kernel, check that the patches apply
+# and start a COPR build of the kernel package. Uses the COPR_CONFIG secret
+# (the contents of a copr-cli config file) only in the build job, which
+# never runs for pull requests.
+name: asahi-kernel-watch
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Start a kernel build even if the project is up to date"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: asahi-kernel-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04-arm
+    container: registry.fedoraproject.org/fedora:44
+    outputs:
+      build: ${{ steps.watch.outputs.build }}
+      asahi_nvr: ${{ steps.watch.outputs.asahi_nvr }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install tools
+        run: container/install-tools.sh
+      - name: Compare @asahi with the COPR project
+        id: watch
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          scripts/kernel-watch.py | tee -a "$GITHUB_OUTPUT"
+          if [ "$FORCE" = true ]; then echo "build=true" >> "$GITHUB_OUTPUT"; fi
+      - name: Report a failed build that is not retried
+        if: contains(steps.watch.outputs.reason, 'not retrying')
+        env:
+          REASON: ${{ steps.watch.outputs.reason }}
+        run: echo "::warning::$REASON"
+      - name: Do the patches apply?
+        if: steps.watch.outputs.build == 'true'
+        env:
+          KERNEL_NVR: ${{ steps.watch.outputs.asahi_nvr }}
+        run: PREP_CHECK=1 scripts/make-srpm.sh kernel out
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true' && github.repository == 'aquarat/apple-silicon-kernel-plus' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    container: registry.fedoraproject.org/fedora:44
+    steps:
+      - name: Install copr-cli
+        run: dnf -y install --setopt=install_weak_deps=False copr-cli
+      - name: Write the copr-cli config
+        env:
+          COPR_CONFIG: ${{ secrets.COPR_CONFIG }}
+        run: |
+          test -n "$COPR_CONFIG" || { echo "::error::the COPR_CONFIG secret is not set"; exit 1; }
+          umask 077
+          mkdir -p "$HOME/.config"
+          printf '%s\n' "$COPR_CONFIG" > "$HOME/.config/copr"
+      - name: Start the kernel build
+        env:
+          ASAHI_NVR: ${{ needs.check.outputs.asahi_nvr }}
+        run: |
+          echo "kernel for @asahi $ASAHI_NVR"
+          copr-cli build-package aquarat/apple-silicon-kernel-plus --name kernel --nowait --timeout 72000
+      - name: Remove the config
+        if: always()
+        run: rm -f "$HOME/.config/copr"
