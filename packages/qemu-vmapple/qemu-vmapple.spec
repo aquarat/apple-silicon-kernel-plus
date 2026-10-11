@@ -12,9 +12,9 @@
 # The SRPM carries every source (scripts/make-srpm.sh): Reims with QEMU and
 # the meson subprojects QEMU needs, and the Rust crates from `cargo vendor`
 # (the metal2vulkan git dependency included). The build needs no network.
-%global reims_commit 294f1489b0469916dcc69ccb624349d386378d47
-%global qemu_commit  2cd151d3b483759e8a527077f9680a54c5ecb93f
-%global reims_date   20261010
+%global reims_commit 51c70ebe079ed111eb7777435eaa2af9311e85d5
+%global qemu_commit  6740a4934402a4bf25d26556f9bf6221c6e6d361
+%global reims_date   20261011
 %global reims_short  %(echo %{reims_commit} | cut -c1-12)
 %global qemu_version 11.1.50
 
@@ -150,5 +150,14 @@ fi
 %{_tmpfilesdir}/qemu-vmapple-kvm-nisv.conf
 
 %changelog
+* Sun Oct 11 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 11.1.50^20261011git51c70eb-1
+- reims-vgpu 51c70eb with qemu-reims-vgpu 6740a49: the copy path (guest
+  data copied directly between guest RAM and mapped Vulkan memory) and the
+  macOS 26 rendering fixes (pipelines with no fragment function,
+  metal2vulkan byte-record attribute loads). Needs mesa-honeykrisp-plus
+  with patch 0002.
+- The forks were rewritten to drop session trailers from commit messages;
+  294f148 is now 7bfdd68 and 2cd151d is 6740a49 (same trees).
+
 * Sat Oct 10 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 11.1.50^20261010git294f148-1
 - First release: reims-vgpu 294f148 with qemu-reims-vgpu 2cd151d

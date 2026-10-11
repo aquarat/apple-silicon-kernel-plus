@@ -23,7 +23,7 @@ in the environment of the QEMU process.
 | patch | status |
 |---|---|
 | 0001 asahi: widen 16-bit varyings before st_vary | in use with macOS guests |
-| 0002 asahi: narrow 16-bit flat fragment inputs from their 32-bit coefficients | **still being validated** |
+| 0002 asahi: narrow 16-bit flat fragment inputs from their 32-bit coefficients | in use with macOS guests (needed since the Reims rendering fixes) |
 
 Both fix crashes in the shader compiler on 16-bit varyings, which shaders
 translated from Metal use. Without them, the compiler aborts the process

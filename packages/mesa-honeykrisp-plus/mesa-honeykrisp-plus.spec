@@ -14,7 +14,7 @@
 
 Name:           mesa-honeykrisp-plus
 Version:        26.2.4
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Patched Mesa Asahi Vulkan driver, installed beside the system Mesa
 License:        MIT
 URL:            https://github.com/aquarat/apple-silicon-kernel-plus
@@ -63,7 +63,6 @@ replace the system Mesa. Programs use it only when VK_DRIVER_FILES names
 its ICD file, or when started through the wrapper: honeykrisp-plus <command>
 (honeykrisp-plus alone prints the VK_DRIVER_FILES value).
 
-Patch 0002 is still being validated.
 Built without window-system integration (no X11/Wayland surfaces), as the
 macOS guest stack uses it: rendering is off-screen.
 
@@ -96,6 +95,12 @@ sed -i 's|@ICD@|%{icd}|' %{buildroot}%{_bindir}/honeykrisp-plus
 %{askp_prefix}/
 
 %changelog
+* Sun Oct 11 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 26.2.4-2
+- 0002 (narrow 16-bit flat fragment inputs from their 32-bit coefficients)
+  is validated: in production on the macOS CI runner's GPU slot with the
+  Reims rendering fixes, which reach it on every Skia/Compose app. Needed
+  by qemu-vmapple 11.1.50^20261011git51c70eb and later
+
 * Sat Oct 10 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 26.2.4-1
 - First release: Mesa 26.2.4 Asahi Vulkan driver with 0001 (widen 16-bit
   varyings before st_vary) and 0002 (narrow 16-bit flat fragment inputs);
