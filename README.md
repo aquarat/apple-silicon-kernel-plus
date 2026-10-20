@@ -15,7 +15,8 @@ Linux or Fedora; report them here.
 
 | package | what | status |
 |---|---|---|
-| `kernel` (`kernel-16k-*`) | Fedora's `kernel-16k` packages built from the Asahi Linux kernel tree (`asahi-wip`, Linux 7.2.11) with `@asahi`'s configuration, the Thunderbolt/USB4 host driver as modules, an AQC113 10GbE fix, and two KVM patches for macOS guests: Apple PAuth VM-key context and emulation of MMIO loads/stores without a syndrome (both on). [packages/kernel](packages/kernel) | **experimental** ([why](packages/kernel/README.md)) |
+| `kernel` (`kernel-16k-*`) | Fedora's `kernel-16k` packages built from the Asahi Linux kernel tree (`asahi-wip`, Linux 7.2.11) with `@asahi`'s configuration, the Thunderbolt/USB4 host driver and the tunnelled-PCIe driver (`pcie-apple-apciec`, NVMe in Thunderbolt enclosures on M1 Pro/Max/Ultra) as modules, an AQC113 10GbE fix, and two KVM patches for macOS guests: Apple PAuth VM-key context and emulation of MMIO loads/stores without a syndrome (both on). [packages/kernel](packages/kernel) | **experimental** ([why](packages/kernel/README.md)) |
+| `apple-silicon-thunderbolt` | A udev rule that turns off NVMe power-state transitions (APST) for drives in Thunderbolt enclosures only; they drop the USB4 link otherwise. [packages/apple-silicon-thunderbolt](packages/apple-silicon-thunderbolt) | experimental |
 | `dkms-apple-avd` | The Asahi AVD video decoder driver with four fixes for long-running streams, built by DKMS. [packages/apple-avd](packages/apple-avd) | stable |
 | `apple-ave`, `dkms-apple-ave` | A V4L2 H.264/HEVC encoder driver for the AVE block, reverse engineered, and `apple-ave-fetch-firmware`, which makes its firmware files on your Mac from Apple's own image. No Apple firmware or Apple data included. [packages/apple-ave](packages/apple-ave) | **experimental** ([why](packages/apple-ave/README.md#status)) |
 | `mesa-honeykrisp-plus` | Mesa's Asahi Vulkan driver (Honeykrisp) with two shader compiler fixes, installed beside the system Mesa and used only through `VK_DRIVER_FILES`. Patch 0002 is still being validated. [packages/mesa-honeykrisp-plus](packages/mesa-honeykrisp-plus) | stable (0002: in validation) |
@@ -27,7 +28,7 @@ As the sources state; "tested" means on at least one machine of that SoC.
 
 | package | SoCs |
 |---|---|
-| kernel | what the Asahi tree supports (M1 and M2 families). Thunderbolt/USB4: the Asahi tree's device trees describe it for t8103, t8112 and t600x; USB3 tunnels and XDomain (thunderbolt-net) only, no PCIe or DisplayPort tunnels yet; used on t6001 (Mac Studio). The KVM patches act only on CPUs with Apple's ACTLR virtualization (M1: t8103, t6000, t6001, t6002; M2: t8112, t6020, t6021, t6022); tested on t6001 |
+| kernel | what the Asahi tree supports (M1 and M2 families). Thunderbolt/USB4: the Asahi tree's device trees describe it for t8103, t8112 and t600x; USB3 tunnels and XDomain (thunderbolt-net); PCIe tunnels on t600x with `pcie-apple-apciec` (tested on t6001, Mac Studio port 3, NVMe enclosure; known issues in [apple-silicon-thunderbolt-linux](https://github.com/aquarat/apple-silicon-thunderbolt-linux#status-and-known-issues)); no DisplayPort tunnels. The KVM patches act only on CPUs with Apple's ACTLR virtualization (M1: t8103, t6000, t6001, t6002; M2: t8112, t6020, t6021, t6022); tested on t6001 |
 | dkms-apple-avd | M1 family (t8103, t6000, t6001, t6002); t8112: H.264 works, HEVC times out (open) |
 | apple-ave | t6000, t8103 (H.264 without B frames), t8112; t6001 and t6002 after enabling them (not yet run in this configuration). All with the macOS 13.5 system firmware |
 | mesa-honeykrisp-plus | M1 and M2 GPUs, as Mesa's Asahi driver |
@@ -41,7 +42,7 @@ yet; this line is a placeholder until it does).
 ```sh
 sudo dnf copr enable aquarat/apple-silicon-kernel-plus
 sudo dnf upgrade                      # moves you to this project's kernel (see below)
-sudo dnf install dkms-apple-avd       # and/or: apple-ave, mesa-honeykrisp-plus
+sudo dnf install dkms-apple-avd       # and/or: apple-ave, mesa-honeykrisp-plus, apple-silicon-thunderbolt
 ```
 
 DKMS packages need `kernel-16k-devel` for each installed kernel.

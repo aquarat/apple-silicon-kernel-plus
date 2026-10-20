@@ -7,7 +7,7 @@
 #   scripts/make-srpm.sh <package> <outdir>
 #   scripts/make-srpm.sh --list
 #
-# Packages: kernel apple-avd apple-ave mesa-honeykrisp-plus qemu-vmapple
+# Packages: kernel apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus qemu-vmapple
 #
 # Environment:
 #   CACHE_DIR      downloads and git checkouts (default: <repo>/.cache)
@@ -21,7 +21,7 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-PACKAGES=(kernel apple-avd apple-ave mesa-honeykrisp-plus qemu-vmapple)
+PACKAGES=(kernel apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus qemu-vmapple)
 CACHE_DIR=${CACHE_DIR:-$HERE/.cache}
 
 die() { echo "make-srpm: $*" >&2; exit 1; }
@@ -337,7 +337,7 @@ build_qemu() {
 
 case $pkg in
 kernel) build_kernel ;;
-apple-avd|apple-ave) build_own ;;
+apple-avd|apple-ave|apple-silicon-thunderbolt) build_own ;;
 mesa-honeykrisp-plus) build_mesa ;;
 qemu-vmapple) build_qemu ;;
 esac

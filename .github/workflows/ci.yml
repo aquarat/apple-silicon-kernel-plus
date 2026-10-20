@@ -62,7 +62,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [apple-avd, apple-ave, mesa-honeykrisp-plus, qemu-vmapple]
+        package: [apple-avd, apple-ave, apple-silicon-thunderbolt, mesa-honeykrisp-plus, qemu-vmapple]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install tools

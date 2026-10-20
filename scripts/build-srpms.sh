@@ -5,7 +5,7 @@
 #   scripts/build-srpms.sh [package...]       default: all packages
 #   OUT=dir scripts/build-srpms.sh            default OUT: <repo>/out
 #
-# Packages: kernel apple-avd apple-ave mesa-honeykrisp-plus qemu-vmapple
+# Packages: kernel apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus qemu-vmapple
 # Downloads and git checkouts are cached in <repo>/.cache (git-ignored).
 #
 # Environment:

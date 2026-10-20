@@ -24,6 +24,7 @@ declare -A SPEC=(
     [kernel]=packages/kernel/kernel-plus.conf
     [apple-avd]=packages/apple-avd/apple-avd.spec
     [apple-ave]=packages/apple-ave/apple-ave.spec
+    [apple-silicon-thunderbolt]=packages/apple-silicon-thunderbolt/apple-silicon-thunderbolt.spec
     [mesa-honeykrisp-plus]=packages/mesa-honeykrisp-plus/mesa-honeykrisp-plus.spec
 )
 # qemu-vmapple is not built on COPR yet: QEMU (GPL-2.0-only) links Reims and
@@ -32,7 +33,7 @@ declare -A SPEC=(
 
 # Build timeouts in seconds (COPR's default is 5 hours).
 declare -A TIMEOUT=([kernel]=72000 [qemu-vmapple]=36000 [mesa-honeykrisp-plus]=18000
-                    [apple-avd]=3600 [apple-ave]=3600)
+                    [apple-avd]=3600 [apple-ave]=3600 [apple-silicon-thunderbolt]=3600)
 
 name=${PROJECT#*/}
 if ! copr-cli get "$PROJECT" >/dev/null 2>&1; then

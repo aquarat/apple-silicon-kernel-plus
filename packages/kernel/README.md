@@ -79,23 +79,27 @@ still behaves as before for every access it does not decode. The
 `qemu-vmapple-kvm-nisv` package, which used to turn it on, is retired
 (packages/qemu-vmapple/README.md).
 
-### Reserved: tunnelled PCIe over Thunderbolt (APCIEC)
+### Tunnelled PCIe over Thunderbolt (APCIEC), patches 0010-0013
 
 The Asahi tree has the Thunderbolt/USB4 host router driver
 (`thunderbolt_apple`, `reset-apple-cio`) but no driver for the PCIe
-controllers that carry PCIe tunnels (APCIEC), so Thunderbolt PCIe devices
-(NVMe enclosures, 10GbE adapters) do not work yet. Two patches will add it,
-and they take these slots:
+controllers that carry PCIe tunnels (APCIEC). Patches 0010-0013 add it, from
+[aquarat/apple-silicon-thunderbolt-linux](https://github.com/aquarat/apple-silicon-thunderbolt-linux)
+(`patches/`, commit 0238ce0):
 
-- `0010-*.patch`: the APCIEC tunnelled-PCIe driver;
-- `0011-*.patch`: its device-tree nodes for t600x (j314c, j316c, j375c,
-  j375d).
+- 0010: DT binding `apple,t6000-apciec`;
+- 0011: the `pcie-apple-apciec` driver (`CONFIG_PCIE_APPLE_APCIEC=m`, in
+  `configs/plus-aarch64.config`);
+- 0012: the APCIEC and DART nodes for t600x die 0, USB4 ports 0-3;
+- 0013: enables them on j375 (Mac Studio, ports 0-3) and j314/j316
+  (MacBook Pro, ports 0-2) and adds the `usb4_N_pcie` aliases m1n1 fills.
 
-Until they are here, the kernel has what the Asahi series does: USB3
-tunnels and XDomain (`thunderbolt_net`), no PCIe or DisplayPort tunnels,
-and suspend is refused while a device is connected. When adding them: the
-config symbol goes into `configs/plus-aarch64.config` (as a module), and
-the `Kernel release naming` rules say which part of the release to bump.
+With them, NVMe drives in USB4/Thunderbolt enclosures work (tested: Mac
+Studio M1 Max, ASM2464PD enclosure). Install `apple-silicon-thunderbolt` for
+the NVMe APST rule those drives need. To update them, copy the series from
+that repository (its `scripts/make-patches.sh` regenerates it for a new
+base) and bump the release as `Kernel release naming` says. Known issues and
+limits are in that repository's README.
 
 ## Thunderbolt in this kernel
 
