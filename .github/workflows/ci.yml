@@ -28,7 +28,7 @@ jobs:
             packages/mesa-honeykrisp-plus/honeykrisp-plus
       - name: Python scripts compile
         run: |
-          python3 -m py_compile scripts/asahi-kernel.py scripts/kernel-watch.py \
+          python3 -m py_compile scripts/asahi-kernel.py scripts/kernel-watch.py scripts/kernel-configs.py \
             packages/apple-ave/firmware/ave_fwgen.py
           python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' \
             packages/apple-ave/firmware/apple-ave-fetch-firmware
@@ -44,8 +44,9 @@ jobs:
         run: rpmlint -c packages/rpmlint.toml packages/*/*.spec
 
   kernel-patches:
-    # Do the patches still apply to the kernel @asahi publishes now?
-    # Builds the kernel SRPM with an rpmbuild -bp check.
+    # Do the patches apply to the pinned sources (packages/kernel/kernel-plus.conf),
+    # and do the configs pass Fedora's checks? Builds the kernel SRPM with an
+    # rpmbuild -bp check.
     runs-on: ubuntu-24.04-arm
     container: registry.fedoraproject.org/fedora:44
     steps:

@@ -12,7 +12,8 @@
 #   CONTAINER=podman        container tool (default: docker, else podman)
 #   CPUS=2                  CPU limit for the container (default 2)
 #   LINT=1                  also run rpmlint on each SRPM
-#   KERNEL_NVR, KERNEL_SRPM, PREP_CHECK: passed to scripts/make-srpm.sh
+#   FEDORA_SRPM, ASAHI_GIT, PREP_CHECK: passed to scripts/make-srpm.sh
+#   (paths must be inside the repository, which is mounted at /src)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${OUT:-$HERE/out}
@@ -34,10 +35,10 @@ for p in "${pkgs[@]}"; do
     echo "=== $p"
     if "$tool" run --rm --cpus="$CPUS" -u "$(id -u):$(id -g)" -e HOME=/tmp \
         -e CARGO_BUILD_JOBS="$CPUS" \
-        ${KERNEL_NVR:+-e KERNEL_NVR="$KERNEL_NVR"} ${PREP_CHECK:+-e PREP_CHECK="$PREP_CHECK"} \
-        ${KERNEL_SRPM:+-e KERNEL_SRPM="$KERNEL_SRPM"} \
+        ${PREP_CHECK:+-e PREP_CHECK="$PREP_CHECK"} \
+        ${FEDORA_SRPM:+-e FEDORA_SRPM="$FEDORA_SRPM"} ${ASAHI_GIT:+-e ASAHI_GIT="$ASAHI_GIT"} \
         -v "$HERE:/src" -w /src "$IMAGE" scripts/make-srpm.sh "$p" "$rel"; then
-        # The kernel spec is @asahi's; it is not linted here.
+        # The kernel spec is Fedora's; it is not linted here.
         if [ "${LINT:-0}" = 1 ] && [ "$p" != kernel ]; then
             "$tool" run --rm -u "$(id -u):$(id -g)" -v "$HERE:/src" -w /src "$IMAGE" \
                 sh -c "rpmlint -c packages/rpmlint.toml $rel/$p-[0-9]*.src.rpm || :"

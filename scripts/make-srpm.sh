@@ -11,13 +11,13 @@
 #
 # Environment:
 #   CACHE_DIR      downloads and git checkouts (default: <repo>/.cache)
-#   KERNEL_NVR     kernel only: the @asahi kernel to rebuild, e.g.
-#                  7.1.13-402.asahi.fc44 (default: the newest published one)
-#   KERNEL_SRPM    kernel only: use this local SRPM instead of downloading
-#   KERNEL_CHROOT  kernel only: @asahi chroot to read (default fedora-44-aarch64)
-#   PREP_CHECK=1   kernel only: also run `rpmbuild -bp` (patches apply?) before
-#                  writing the SRPM; needs the kernel's build tools, not its
-#                  full BuildRequires
+#   FEDORA_SRPM    kernel only: use this local copy of the Fedora kernel SRPM
+#                  named in packages/kernel/kernel-plus.conf (sha256 checked)
+#   ASAHI_GIT      kernel only: fetch the Asahi commit from this git
+#                  repository (a local clone, say) instead of ASAHI_REPO
+#   PREP_CHECK=1   kernel only: also run `rpmbuild -bp` (patches apply,
+#                  configs pass Fedora's checks?) before writing the SRPM;
+#                  needs the kernel's build tools, not its full BuildRequires
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -31,7 +31,7 @@ if [ "${1:-}" = --list ]; then printf '%s\n' "${PACKAGES[@]}"; exit 0; fi
 pkg=${1:?usage: $0 <package> <outdir> | --list}
 out=${2:?usage: $0 <package> <outdir>}
 printf '%s\n' "${PACKAGES[@]}" | grep -qx -- "$pkg" || die "unknown package '$pkg' (${PACKAGES[*]})"
-for c in rpmbuild rpmspec tar xz sha256sum python3; do command -v "$c" >/dev/null || die "missing $c"; done
+for c in rpmbuild rpmspec tar xz sha256sum python3 curl; do command -v "$c" >/dev/null || die "missing $c"; done
 mkdir -p "$out" "$CACHE_DIR"
 out=$(cd "$out" && pwd)
 
@@ -75,62 +75,160 @@ finish() {
     log "wrote $out/$(basename "$srpm")"
 }
 
+# A download into $CACHE_DIR/dl, checked against a sha256; prints the path.
+fetch_url() {
+    local url=$1 sum=$2 f
+    f="$CACHE_DIR/dl/$(basename "$url")"
+    if [ ! -f "$f" ] || ! echo "$sum  $f" | sha256sum -c --quiet - 2>/dev/null; then
+        mkdir -p "$CACHE_DIR/dl"
+        log "download $url"
+        curl -fsSL --retry 3 -o "$f.part" "$url"
+        mv "$f.part" "$f"
+    fi
+    echo "$sum  $f" | sha256sum -c --quiet - || die "$(basename "$f"): sha256 is not $sum"
+    echo "$f"
+}
+
+# The kernel: Fedora's kernel SRPM of KERNEL_VERSION (spec, scripts,
+# configs, Fedora's patch) turned into a kernel from the Asahi tree at
+# ASAHI_COMMIT. packages/kernel/README.md describes each step.
 build_kernel() {
-    local conf="$HERE/packages/kernel/kernel-plus.conf" src nvr buildid date
+    local conf="$HERE/packages/kernel/kernel-plus.conf" spec tarball srpm g base asahi fed
+    local tree patch pv buildid nvr date mk
+    local -a G
     # shellcheck source=packages/kernel/kernel-plus.conf
     . "$conf"
+    for c in git rpm cpio; do command -v "$c" >/dev/null || die "missing $c"; done
     buildid=${BUILDID:?BUILDID missing in $conf}
-    if [ -n "${KERNEL_SRPM:-}" ]; then
-        src=$KERNEL_SRPM
+    [[ $ASAHI_COMMIT =~ ^[0-9a-f]{40}$ ]] || die "ASAHI_COMMIT in $conf is not a full commit id"
+    [[ $PKGRELEASE =~ ^[0-9]+\.asahiwip$ ]] || die "PKGRELEASE in $conf must look like 900.asahiwip"
+    pv=$(echo "$KERNEL_VERSION" | cut -d. -f1,2)
+
+    # 1. Fedora's SRPM: kernel.spec and everything it needs.
+    if [ -n "${FEDORA_SRPM:-}" ]; then
+        srpm=$FEDORA_SRPM
+        echo "$FEDORA_SRPM_SHA256  $srpm" | sha256sum -c --quiet - ||
+            die "$srpm: sha256 is not FEDORA_SRPM_SHA256"
     else
-        src=$(python3 "$HERE/scripts/asahi-kernel.py" --chroot "${KERNEL_CHROOT:-fedora-44-aarch64}" \
-              fetch ${KERNEL_NVR:+"$KERNEL_NVR"} "$CACHE_DIR/asahi-kernel")
+        srpm=$(fetch_url "$FEDORA_SRPM_URL" "$FEDORA_SRPM_SHA256")
     fi
-    log "base $(basename "$src") sha256 $(sha256sum "$src" | cut -d' ' -f1)"
+    log "base $(basename "$srpm") sha256 $FEDORA_SRPM_SHA256"
     rpm --define "_topdir $top" --define "_sourcedir $top/SOURCES" --define "_specdir $top/SPECS" \
-        -i "$src" 2>/dev/null
-    local spec="$top/SPECS/kernel.spec"
-    [ -f "$spec" ] || die "no kernel.spec in $(basename "$src")"
+        -i "$srpm" 2>/dev/null
+    spec="$top/SPECS/kernel.spec"
+    [ -f "$spec" ] || die "no kernel.spec in $(basename "$srpm")"
+    [ "$(sed -n 's/^%define specrpmversion //p' "$spec")" = "$KERNEL_VERSION" ] ||
+        die "$(basename "$srpm") is not kernel $KERNEL_VERSION"
+    [ -f "$top/SOURCES/patch-$pv-redhat.patch" ] || die "no patch-$pv-redhat.patch in $(basename "$srpm")"
     # Fedora's kernel.spec applies SOURCES/linux-kernel-test.patch last, and
-    # @asahi ships it empty. Refuse to overwrite one that is not empty.
+    # ships it empty. Refuse to overwrite one that is not empty.
     [ -s "$top/SOURCES/linux-kernel-test.patch" ] &&
-        die "the base SRPM already carries a non-empty linux-kernel-test.patch"
+        die "the Fedora SRPM already carries a non-empty linux-kernel-test.patch"
     grep -q '^ApplyOptionalPatch linux-kernel-test.patch' "$spec" ||
         die "kernel.spec no longer applies linux-kernel-test.patch; update make-srpm.sh"
+
+    # 2. Source0: kernel.org's tarball instead of Fedora's repack (same files).
+    tarball=$(fetch_url "$LINUX_TARBALL_URL" "$LINUX_TARBALL_SHA256")
+    [ "$(basename "$tarball")" = "linux-$KERNEL_VERSION.tar.xz" ] || die "LINUX_TARBALL_URL is not linux-$KERNEL_VERSION.tar.xz"
+    cp "$tarball" "$top/SOURCES/"
+
+    # 3. patch-<major>-redhat.patch: the Asahi tree at ASAHI_COMMIT plus
+    # Fedora's patch, as one diff against the tarball (the layout @asahi's
+    # SRPMs use). Built in a git repository without a work tree.
+    g="$CACHE_DIR/git/linux"
+    [ -d "$g" ] || git init -q --bare "$g"
+    G=(git --git-dir="$g" -c core.quotePath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false
+       -c diff.renames=false -c diff.algorithm=myers -c core.abbrev=12)
+    base=$("${G[@]}" rev-parse -q --verify "refs/tags/tarball-$KERNEL_VERSION^{tree}" 2>/dev/null || :)
+    if [ -z "$base" ]; then
+        log "import linux-$KERNEL_VERSION.tar.xz"
+        tree="$top/tarball"
+        mkdir -p "$tree"
+        tar -xf "$tarball" -C "$tree" --strip-components=1
+        (cd "$tree" && GIT_INDEX_FILE="$top/tarball.index" "${G[@]}" --work-tree=. add -A -f .)
+        base=$(GIT_INDEX_FILE="$top/tarball.index" "${G[@]}" write-tree)
+        "${G[@]}" tag -f "tarball-$KERNEL_VERSION" "$base" >/dev/null
+        rm -rf "$tree" "$top/tarball.index"
+    fi
+    if ! "${G[@]}" cat-file -e "$ASAHI_COMMIT^{commit}" 2>/dev/null; then
+        log "fetch $ASAHI_COMMIT from ${ASAHI_GIT:-$ASAHI_REPO}"
+        "${G[@]}" fetch -q --depth 1 "${ASAHI_GIT:-$ASAHI_REPO}" "$ASAHI_COMMIT" ||
+            die "cannot fetch $ASAHI_COMMIT (packages/kernel/README.md: if the commit is gone)"
+        "${G[@]}" cat-file -e "$ASAHI_COMMIT^{commit}" || die "fetch did not give $ASAHI_COMMIT"
+    fi
+    mk=$("${G[@]}" show "$ASAHI_COMMIT:Makefile" | awk -F' = ' '
+        $1=="VERSION"{v=$2} $1=="PATCHLEVEL"{p=$2} $1=="SUBLEVEL"{s=$2} $1=="EXTRAVERSION"{e=$2}
+        END{print v"."p"."s e}')
+    [ "$mk" = "$KERNEL_VERSION" ] || die "the Asahi commit is Linux $mk, kernel-plus.conf says $KERNEL_VERSION"
+    asahi=$("${G[@]}" rev-parse "$ASAHI_COMMIT^{tree}")
+    GIT_INDEX_FILE="$top/fedora.index" "${G[@]}" read-tree "$asahi"
+    GIT_INDEX_FILE="$top/fedora.index" "${G[@]}" apply --cached "$top/SOURCES/patch-$pv-redhat.patch" ||
+        die "Fedora's patch-$pv-redhat.patch does not apply to the Asahi tree"
+    fed=$(GIT_INDEX_FILE="$top/fedora.index" "${G[@]}" write-tree)
+    rm -f "$top/fedora.index"
+    patch="$top/SOURCES/patch-$pv-redhat.patch"
+    "${G[@]}" diff --no-renames --full-index "$base" "$fed" > "$patch.new"
+    grep -q '^GIT binary patch' "$patch.new" && die "the Asahi tree changes binary files; patch(1) cannot apply that"
+    mv "$patch.new" "$patch"
+    log "patch-$pv-redhat.patch: Asahi $ASAHI_BRANCH ${ASAHI_COMMIT:0:12} + Fedora $(basename "$srpm" .src.rpm)," \
+        "$("${G[@]}" diff --shortstat "$base" "$fed" | sed 's/^ *//'), sha256 $(sha256sum "$patch" | cut -d' ' -f1)"
+
+    # 4. This project's patches, applied after it.
     cat "$HERE"/packages/kernel/patches/*.patch > "$top/SOURCES/linux-kernel-test.patch"
 
-    # Our settings go first, so they win over the spec's own defaults.
+    # 5. Configs: Fedora's, with @asahi's choices and this project's.
+    python3 -I "$HERE/scripts/kernel-configs.py" apply "$top/SOURCES" "$HERE/packages/kernel/configs" >&2
+
+    # 6. @asahi's module placement: the Apple display and GPU drivers in
+    # kernel-16k-modules-core.
+    local dv="$top/SOURCES/def_variants.yaml.fedora" anchor='  - drivers/gpu/drm/drm.*: modules-core'
+    grep -qxF -- "$anchor" "$dv" || die "def_variants.yaml.fedora changed; update make-srpm.sh"
+    if ! grep -q 'drivers/gpu/drm/asahi/' "$dv"; then
+        awk -v a="$anchor" '{ print } $0 == a {
+            print "  - drivers/gpu/drm/apple/.*: modules-core"
+            print "  - drivers/gpu/drm/asahi/.*: modules-core" }' "$dv" > "$dv.new" && mv "$dv.new" "$dv"
+    fi
+
+    # 7. kernel.spec: release, the 16k variant on, the rest off.
+    if ! grep -q '^%define pkgrelease [0-9]*$' "$spec" ||
+       ! grep -q '^%define specrelease [0-9]*%{?buildid}%{?dist}$' "$spec"; then
+        die "kernel.spec has no plain pkgrelease/specrelease; update make-srpm.sh"
+    fi
+    sed -i -e "s/^%define pkgrelease [0-9]*\$/%define pkgrelease $PKGRELEASE/" \
+           -e "s/^%define specrelease [0-9]*%{?buildid}%{?dist}\$/%define specrelease $PKGRELEASE%{?buildid}%{?dist}/" "$spec"
     {
-        echo "# apple-silicon-kernel-plus: this is the @asahi kernel.spec with these"
-        echo "# settings and the patches in linux-kernel-test.patch"
+        echo "# apple-silicon-kernel-plus: Fedora's kernel.spec ($(basename "$srpm" .src.rpm))"
+        echo "# for the Asahi Linux kernel tree ($ASAHI_BRANCH $ASAHI_COMMIT),"
+        echo "# with @asahi's 16k variant, settings and this project's patches"
         echo "# (https://github.com/aquarat/apple-silicon-kernel-plus, packages/kernel)."
         echo "%define buildid .$buildid"
+        echo "%define _with_arm64_16k 1"
         for w in $WITHOUT; do echo "%define _without_$w 1"; done
         echo
     } > "$top/hdr"
     cat "$top/hdr" "$spec" > "$spec.new" && mv "$spec.new" "$spec"
-    # Fedora forces kernel-headers on; @asahi's own kernel-headers stays the
-    # one users get. Harmless if the line changes upstream (headers are built).
-    sed -i 's/^%define with_headers 1$/%define with_headers %{?_without_headers: 0} %{?!_without_headers: 1}/' "$spec"
 
     nvr=$(rpmspec -q --srpm --qf '%{version}-%{release}' "$spec" 2>/dev/null)
+    [[ $nvr == "$KERNEL_VERSION-$PKGRELEASE.$buildid"* ]] || die "unexpected version-release $nvr"
     date=$(LC_ALL=C date -u -d "@$SOURCE_DATE_EPOCH" '+%a %b %d %Y')
-    awk -v hdr="* $date $CHANGELOG_IDENTITY - ${nvr%.fc*}" -v pl="$(find "$HERE/packages/kernel/patches" -name '*.patch' -printf '%f\n' | sort | sed 's/^/- /')" '
+    awk -v hdr="* $date $CHANGELOG_IDENTITY - ${nvr%.fc*}" \
+        -v src="- Asahi Linux kernel tree, $ASAHI_BRANCH at ${ASAHI_COMMIT:0:12} (Linux $KERNEL_VERSION), with Fedora's $(basename "$srpm" .src.rpm) patch and configs" \
+        -v pl="$(find "$HERE/packages/kernel/patches" -name '*.patch' -printf '%f\n' | sort | sed 's/^/- /')" '
         { print }
-        /^%changelog$/ && !done { print hdr; print "- apple-silicon-kernel-plus rebuild of the @asahi kernel, 16k variant only, with:"; print pl; print ""; done=1 }
+        /^%changelog$/ && !done { print hdr; print src; print "- apple-silicon-kernel-plus: 16k variant only, @asahi config choices, with:"; print pl; print ""; done=1 }
     ' "$spec" > "$spec.new" && mv "$spec.new" "$spec"
     log "release $nvr (16k only; without: $WITHOUT)"
 
     if [ "${PREP_CHECK:-0}" = 1 ]; then
-        log "rpmbuild -bp (do the patches apply?)"
+        log "rpmbuild -bp (do the patches apply, do the configs pass?)"
         if ! "${RPMB[@]}" -bp --nodeps --target aarch64 "$spec" > "$top/prep.log" 2>&1; then
-            tail -25 "$top/prep.log" >&2
+            tail -40 "$top/prep.log" >&2
             grep -q 'End of patch applications' "$top/prep.log" &&
-                die "the patches apply, but %prep failed later (a missing tool?)"
-            die "the patches do not apply to $(basename "$src")"
+                die "the patches apply, but %prep failed later (configs? a missing tool?)"
+            die "the patches do not apply"
         fi
-        log "patches apply"
-        rm -rf "$top/BUILD"/*
+        log "patches apply, configs pass"
+        rm -rf "${top:?}/BUILD"/*
     fi
     finish "$spec"
 }

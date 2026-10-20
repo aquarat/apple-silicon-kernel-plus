@@ -39,8 +39,8 @@ if ! copr-cli get "$PROJECT" >/dev/null 2>&1; then
     chroot_args=()
     for c in "${CHROOTS[@]}"; do chroot_args+=(--chroot "$c"); done
     run copr-cli create "$name" "${chroot_args[@]}" \
-        --description "Unofficial packages for Fedora Asahi Remix: the @asahi kernel with KVM patches for macOS guests, AVD/AVE video drivers (DKMS), a patched Honeykrisp Vulkan driver and QEMU with vmapple and Reims. Not affiliated with or endorsed by Asahi Linux, Fedora or Apple." \
-        --instructions "See https://github.com/aquarat/apple-silicon-kernel-plus#install. Enabling this repository replaces the stock @asahi kernel with this project's build. Do not report bugs from these packages to Asahi Linux or Fedora." \
+        --description "Unofficial packages for Fedora Asahi Remix: an experimental kernel from the Asahi Linux asahi-wip tree (Linux 7.2, Thunderbolt/USB4) with KVM patches for macOS guests, AVD/AVE video drivers (DKMS), a patched Honeykrisp Vulkan driver and QEMU with vmapple and Reims. Not affiliated with or endorsed by Asahi Linux, Fedora or Apple." \
+        --instructions "See https://github.com/aquarat/apple-silicon-kernel-plus#install. Enabling this repository replaces the stock @asahi kernel with this project's experimental 7.2 build; read the README's Rollback section first. Do not report bugs from these packages to Asahi Linux or Fedora." \
         --enable-net off --unlisted-on-hp off --appstream off
 fi
 

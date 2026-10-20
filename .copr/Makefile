@@ -3,7 +3,7 @@
 # with network access:
 #   make -f <clone>/.copr/Makefile srpm outdir=<dir> spec=<path from the package definition>
 # The package is the directory of `spec`: packages/<package>/<anything>.
-# For the kernel, whose spec comes from @asahi, use packages/kernel/kernel-plus.conf.
+# For the kernel, whose spec comes from Fedora's SRPM, use packages/kernel/kernel-plus.conf.
 # PKG=<package> overrides. Locally: make -f .copr/Makefile srpm outdir=out PKG=apple-avd
 
 TOP := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)

@@ -1,0 +1,105 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: aquarat <3090997+aquarat@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 12:00:00 +0000
+Subject: [PATCH 3/3] net: atlantic: atl2: keep the station MAC unicast filter
+ enabled
+
+Since the AQC113 (ATL2) filter rework in 7.2, the station MAC address is
+programmed into the L2 unicast filter at the firmware-reported
+l2_filters_base_index, and the unicast/multicast list follows it at
+base + 1 .. base + count. hw_atl2_hw_packet_filter_set() still calls
+hw_atl_b0_hw_packet_filter_set(), whose loop enables filter i (1..32)
+only when i <= mc_list_count. With a non-zero base index, every
+packet_filter_set (aq_nic_start, each ndo_set_rx_mode) switches the
+station MAC filter off unless base <= mc_list_count. Unicast frames to
+the interface's own address then get no UC tag and the L2_PROMISC_OFF
+action resolver entry drops them. Broadcast still works (bc_flr_tag),
+so DHCP succeeds while unicast traffic is lost; promiscuous mode hides
+the problem.
+
+Give ATL2 its own packet_filter_set that does the B0 work but enables
+the unicast filters relative to l2_filters_base_index, and bound the
+list in hw_atl2_hw_multicast_list_set() against the entries left after
+the base index.
+
+On the built-in AQC113 of an M1 Max Mac Studio the firmware reports base
+index 9: unicast RX stopped with eight multicast addresses and came back
+when a ninth was added.
+
+Tested: 7.2.11 (AsahiLinux asahi-wip), M1 Max Mac Studio, built-in 10GbE:
+unicast RX works with promiscuous mode off.
+Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
+---
+ .../aquantia/atlantic/hw_atl2/hw_atl2.c       | 50 ++++++++++++++++++-
+ 1 file changed, 48 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/aquantia/atlantic/hw_atl2/hw_atl2.c b/drivers/net/ethernet/aquantia/atlantic/hw_atl2/hw_atl2.c
+index 25dd7150a..037848c48 100644
+--- a/drivers/net/ethernet/aquantia/atlantic/hw_atl2/hw_atl2.c
++++ b/drivers/net/ethernet/aquantia/atlantic/hw_atl2/hw_atl2.c
+@@ -759,9 +759,55 @@ static int hw_atl2_hw_ring_tx_init(struct aq_hw_s *self,
+ static int hw_atl2_hw_packet_filter_set(struct aq_hw_s *self,
+ 					unsigned int packet_filter)
+ {
++	struct aq_nic_cfg_s *cfg = self->aq_nic_cfg;
++	struct hw_atl2_priv *priv = self->priv;
++	u32 base = priv->l2_filters_base_index;
++	u32 vlan_promisc;
++	u32 l2_promisc;
++	unsigned int i;
++
+ 	hw_atl2_hw_new_rx_filter_promisc(self, IS_FILTER_ENABLED(IFF_PROMISC));
+ 
+-	return hw_atl_b0_hw_packet_filter_set(self, packet_filter);
++	/* Same as hw_atl_b0_hw_packet_filter_set(), except for the L2
++	 * unicast filter enables: on ATL2 the station MAC lives at the
++	 * FW-reported l2_filters_base_index (not at index 0) and the
++	 * UC/MC list follows it.  The B0 loop (indices 1..32, enabled iff
++	 * i <= mc_list_count) would switch the station MAC filter off
++	 * whenever l2_filters_base_index != 0, so unicast frames get no
++	 * UC tag and are dropped by the L2_PROMISC_OFF ART entry.
++	 */
++	l2_promisc = IS_FILTER_ENABLED(IFF_PROMISC) ||
++		     !!(cfg->priv_flags & BIT(AQ_HW_LOOPBACK_DMA_NET));
++	vlan_promisc = l2_promisc || cfg->is_vlan_force_promisc;
++
++	hw_atl_rpfl2promiscuous_mode_en_set(self, l2_promisc);
++
++	hw_atl_rpf_vlan_prom_mode_en_set(self, vlan_promisc);
++
++	hw_atl_rpfl2multicast_flr_en_set(self,
++					 IS_FILTER_ENABLED(IFF_ALLMULTI) &&
++					 IS_FILTER_ENABLED(IFF_MULTICAST), 0);
++
++	hw_atl_rpfl2_accept_all_mc_packets_set(self,
++					      IS_FILTER_ENABLED(IFF_ALLMULTI) &&
++					      IS_FILTER_ENABLED(IFF_MULTICAST));
++
++	hw_atl_rpfl2broadcast_en_set(self, IS_FILTER_ENABLED(IFF_BROADCAST));
++
++	for (i = 0; i < HW_ATL2_MAC_MAX; i++) {
++		u32 en;
++
++		if (i == base)
++			en = 1U;
++		else if (i > base && i <= base + cfg->mc_list_count)
++			en = cfg->is_mc_list_enabled ? 1U : 0U;
++		else
++			en = 0U;
++
++		hw_atl_rpfl2_uc_flr_en_set(self, en, i);
++	}
++
++	return aq_hw_err_from_flags(self);
+ }
+ 
+ #undef IS_FILTER_ENABLED
+@@ -777,7 +823,7 @@ static int hw_atl2_hw_multicast_list_set(struct aq_hw_s *self,
+ 	struct aq_nic_cfg_s *cfg = self->aq_nic_cfg;
+ 	int err = 0;
+ 
+-	if (count > (HW_ATL2_MAC_MAX - HW_ATL2_MAC_MIN)) {
++	if (count > (HW_ATL2_MAC_MAX - base_location)) {
+ 		err = -EBADRQC;
+ 		goto err_exit;
+ 	}

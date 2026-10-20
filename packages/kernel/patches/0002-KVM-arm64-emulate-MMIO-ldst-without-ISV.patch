@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Sat, 10 Oct 2026 12:00:00 +0000
-Subject: [PATCH 2/2] KVM: arm64: optionally emulate MMIO load/store-immediate
- aborts without a syndrome
+Subject: [PATCH 2/3] KVM: arm64: emulate MMIO load/store-immediate aborts
+ without a syndrome
 
 XNU (macOS) programs the GIC redistributor with a pre-indexed store
 ("str w9, [x8, #128]!"). The CPU reports such stage-2 aborts without a
@@ -17,12 +17,13 @@ against FAR, synthesise a valid ISS, apply the base writeback and let the
 normal MMIO path (in-kernel vGIC or userspace) finish the access.
 Everything else keeps the previous behaviour.
 
-The emulation is off by default. KVM is built in, so enable it with
-kvm.emulate_nisv_ldst=1 on the kernel command line, or at run time by
-writing Y to /sys/module/kvm/parameters/emulate_nisv_ldst. With it off,
+The emulation is on by default. KVM is built in, so turn it off with
+kvm.emulate_nisv_ldst=0 on the kernel command line, or at run time by
+writing N to /sys/module/kvm/parameters/emulate_nisv_ldst. With it off,
 KVM behaves exactly as without this patch.
 
 Tested: kernel-7.1.13-401.asahi on t6001 (M1 Max), macOS 13 and 26 guests
+(rebased to 7.2.11; default changed from off to on)
 Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
 ---
  arch/arm64/include/asm/kvm_host.h      |  1 +
@@ -31,10 +32,10 @@ Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
  3 files changed, 103 insertions(+)
 
 diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
-index 5071264..ba63abc 100644
+index 076e4900a..080f63070 100644
 --- a/arch/arm64/include/asm/kvm_host.h
 +++ b/arch/arm64/include/asm/kvm_host.h
-@@ -431,6 +431,7 @@ struct kvm_vcpu_fault_info {
+@@ -428,6 +428,7 @@ struct kvm_vcpu_fault_info {
  	u64 far_el2;		/* Hyp Fault Address Register */
  	u64 hpfar_el2;		/* Hyp IPA Fault Address Register */
  	u64 disr_el1;		/* Deferred [SError] Status Register */
@@ -43,7 +44,7 @@ index 5071264..ba63abc 100644
  
  /*
 diff --git a/arch/arm64/kvm/hyp/include/hyp/fault.h b/arch/arm64/kvm/hyp/include/hyp/fault.h
-index fc573fc..260de48 100644
+index fc573fc76..260de486e 100644
 --- a/arch/arm64/kvm/hyp/include/hyp/fault.h
 +++ b/arch/arm64/kvm/hyp/include/hyp/fault.h
 @@ -79,12 +79,36 @@ static inline bool __hpfar_valid(u64 esr)
@@ -84,17 +85,17 @@ index fc573fc..260de48 100644
  	if (__hpfar_valid(esr))
  		hpfar = read_sysreg(hpfar_el2);
 diff --git a/arch/arm64/kvm/mmio.c b/arch/arm64/kvm/mmio.c
-index e2285ed..a7204eb 100644
+index d1c3a352d..d669f1cc7 100644
 --- a/arch/arm64/kvm/mmio.c
 +++ b/arch/arm64/kvm/mmio.c
-@@ -150,6 +150,81 @@ int kvm_handle_mmio_return(struct kvm_vcpu *vcpu)
+@@ -151,6 +151,81 @@ int kvm_handle_mmio_return(struct kvm_vcpu *vcpu)
  	return 1;
  }
  
-+static bool emulate_nisv_ldst;
++static bool emulate_nisv_ldst = true;
 +module_param(emulate_nisv_ldst, bool, 0644);
 +MODULE_PARM_DESC(emulate_nisv_ldst,
-+		 "Decode and emulate MMIO load/store-immediate aborts that lack a valid syndrome (default: off)");
++		 "Decode and emulate MMIO load/store-immediate aborts that lack a valid syndrome (default: on)");
 +
 +/*
 + * Some guests (macOS on the VMApple platform) access MMIO with writeback
@@ -169,7 +170,7 @@ index e2285ed..a7204eb 100644
  int io_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa)
  {
  	struct kvm_run *run = vcpu->run;
-@@ -161,6 +236,9 @@ int io_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa)
+@@ -162,6 +237,9 @@ int io_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa)
  	u8 data_buf[8];
  	u64 esr;
  

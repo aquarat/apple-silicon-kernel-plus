@@ -3,7 +3,8 @@
 # Install the tools that build this project's SRPMs and lint its specs and
 # scripts, on Fedora (as root). Used by container/Containerfile and by the
 # GitHub workflows. The compiler and kernel tools are only for the kernel
-# prep check (rpmbuild -bp: do the patches apply?).
+# prep check (rpmbuild -bp: do the patches apply, do the configs pass
+# Fedora's checks; the Asahi tree needs Rust, hence bindgen and rust-src).
 set -e
 dnf -y install --setopt=install_weak_deps=False \
     rpm-build rpmdevtools rpmlint cpio xz zstd bzip2 tar gzip \
@@ -11,5 +12,5 @@ dnf -y install --setopt=install_weak_deps=False \
     meson ninja-build cargo rust ShellCheck \
     python3-rpm-macros systemd-rpm-macros gcc flex bison bc perl-interpreter \
     openssl openssl-devel elfutils-libelf-devel dwarves hostname kmod which \
-    glibc-langpack-en "$@"
+    glibc-langpack-en bindgen rust-src python3-pyyaml "$@"
 dnf clean all
