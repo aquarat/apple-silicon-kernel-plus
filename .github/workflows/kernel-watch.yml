@@ -1,9 +1,15 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Daily: when @asahi publishes a new kernel, check that the patches apply
-# and start a COPR build of the kernel package. Uses the COPR_CONFIG secret
-# (the contents of a copr-cli config file) only in the build job, which
-# never runs for pull requests.
-name: asahi-kernel-watch
+# Daily kernel status (scripts/kernel-watch.py):
+# - starts a COPR kernel build when packages/kernel/kernel-plus.conf on the
+#   default branch names a release the project has not built (that is, after
+#   a maintainer's bump was merged), once its prep check passes;
+# - reports, as warnings, what a maintainer should look at: the Asahi
+#   branch moved, kernel.org has a newer stable release of our series,
+#   @asahi publishes a kernel that sorts above ours.
+# The kernel never follows upstream by itself (docs/update-policy.md).
+# Uses the COPR_CONFIG secret (the contents of a copr-cli config file) only
+# in the build job, which never runs for pull requests.
+name: kernel-watch
 
 on:
   schedule:
@@ -11,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: "Start a kernel build even if the project is up to date"
+        description: "Start a kernel build even if the project already has this release"
         type: boolean
         default: false
 
@@ -19,7 +25,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: asahi-kernel-watch
+  group: kernel-watch
   cancel-in-progress: false
 
 jobs:
@@ -28,27 +34,28 @@ jobs:
     container: registry.fedoraproject.org/fedora:44
     outputs:
       build: ${{ steps.watch.outputs.build }}
-      asahi_nvr: ${{ steps.watch.outputs.asahi_nvr }}
+      ours: ${{ steps.watch.outputs.ours }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install tools
         run: container/install-tools.sh
-      - name: Compare @asahi with the COPR project
+      - name: Kernel status
         id: watch
         env:
           FORCE: ${{ inputs.force }}
         run: |
           scripts/kernel-watch.py | tee -a "$GITHUB_OUTPUT"
           if [ "$FORCE" = true ]; then echo "build=true" >> "$GITHUB_OUTPUT"; fi
-      - name: Report a failed build that is not retried
-        if: contains(steps.watch.outputs.reason, 'not retrying')
+      - name: Report what needs a maintainer
+        if: steps.watch.outputs.notices != '' || contains(steps.watch.outputs.reason, 'not retrying')
         env:
+          NOTICES: ${{ steps.watch.outputs.notices }}
           REASON: ${{ steps.watch.outputs.reason }}
-        run: echo "::warning::$REASON"
-      - name: Do the patches apply?
+        run: |
+          [ -z "$NOTICES" ] || echo "::warning::$NOTICES"
+          case $REASON in *"not retrying"*) echo "::warning::$REASON" ;; esac
+      - name: Do the patches apply, do the configs pass?
         if: steps.watch.outputs.build == 'true'
-        env:
-          KERNEL_NVR: ${{ steps.watch.outputs.asahi_nvr }}
         run: PREP_CHECK=1 scripts/make-srpm.sh kernel out
 
   build:
@@ -69,9 +76,9 @@ jobs:
           printf '%s\n' "$COPR_CONFIG" > "$HOME/.config/copr"
       - name: Start the kernel build
         env:
-          ASAHI_NVR: ${{ needs.check.outputs.asahi_nvr }}
+          OURS: ${{ needs.check.outputs.ours }}
         run: |
-          echo "kernel for @asahi $ASAHI_NVR"
+          echo "kernel $OURS"
           copr-cli build-package aquarat/apple-silicon-kernel-plus --name kernel --nowait --timeout 72000
       - name: Remove the config
         if: always()
