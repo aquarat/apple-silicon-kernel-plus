@@ -35,17 +35,18 @@ the slice, since the reference slot table cannot be filled for an entry
 that has no buffer.
 
 Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
-[7.1.13 port: the check runs right after avd_run_postamble(), so the media request of a
- rejected slice is completed; the slice already copied is freed by avd_h264_done().]
+[7.1.13 and 7.2.11 ports: the check runs right after avd_run_postamble(),
+ so the media request of a rejected slice is completed; the slice already
+ copied is freed by avd_h264_done().]
 ---
  avd-h264.c | 54 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
  1 file changed, 54 insertions(+)
 
 diff --git a/avd-h264.c b/avd-h264.c
-index 2db9bd6..8c9c7df 100644
+index 7fe88c4..ef81356 100644
 --- a/avd-h264.c
 +++ b/avd-h264.c
-@@ -671,6 +671,54 @@ static void avd_h264_run_preamble(struct avd_ctx *ctx, struct avd_h264_run *run)
+@@ -678,6 +678,54 @@ static void avd_h264_run_preamble(struct avd_ctx *ctx, struct avd_h264_run *run)
  	run->addresses.mv_color = run->base.y_out + (dst_len - mv_color_len);
  }
  
@@ -97,10 +98,10 @@ index 2db9bd6..8c9c7df 100644
 +	return true;
 +}
 +
- static int avd_h264_run(struct avd_ctx *ctx)
+ static int avd_h264_realloc_slices(struct avd_ctx *ctx)
  {
  	struct avd_h264_ctx *h264_ctx = ctx->priv;
-@@ -709,6 +757,12 @@ static int avd_h264_run(struct avd_ctx *ctx)
+@@ -753,6 +801,12 @@ static int avd_h264_run(struct avd_ctx *ctx)
  
  	avd_run_postamble(ctx, &run.base);
  
@@ -111,5 +112,5 @@ index 2db9bd6..8c9c7df 100644
 +	}
 +
  	if (is_new_frame(run.slice_params)) {
- 		ret = avd_init_job(ctx, AVD_CODEC_H264, MAX_SLICES);
- 		if (ret)
+ 		ret = avd_init_job(ctx, AVD_CODEC_H264,
+ 				   h264_ctx->alloc_slice_num + 1);

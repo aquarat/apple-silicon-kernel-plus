@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: aquarat <3090997+aquarat@users.noreply.github.com>
+Date: Sun, 13 Sep 2026 11:54:30 +0000
+Subject: [PATCH 4/4] media: apple: avd: h264: complete the request and drop
+ the job on early errors
+
+avd_h264_run() leaves through err_free_jobs when growing the slice table
+fails or when the slice buffer cannot be allocated. That path returns
+before avd_run_postamble(), so the media request of the rejected slice is
+never completed and every later request on the context fails with EBUSY.
+It also frees ctx->job.segments without clearing the pointer: the next
+slice of the same frame passes the !ctx->job.segments check, is written
+into the freed table by stream_slice(), and avd_submit_job() frees it a
+second time.
+
+Complete the request on that path too, and set ctx->job.segments to
+NULL after freeing it, so the rest of the frame is refused (-EINVAL) and
+the next frame starts a new job.
+
+The 7.1 version of this patch also reset slice_num in avd_h264_done();
+7.2 does that itself.
+
+Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
+---
+ avd-h264.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/avd-h264.c b/avd-h264.c
+index edb5280..5fcb251 100644
+--- a/avd-h264.c
++++ b/avd-h264.c
+@@ -829,7 +829,15 @@ static int avd_h264_run(struct avd_ctx *ctx)
+ 	return avd_submit_job(ctx);
+ 
+ err_free_jobs:
++	/*
++	 * Complete the request (later requests on the context fail with EBUSY
++	 * otherwise) and drop the frame's job: the remaining slices of this
++	 * frame are refused by the !ctx->job.segments check until the next
++	 * frame starts a new job.
++	 */
++	avd_run_postamble(ctx, &run.base);
+ 	kvfree(ctx->job.segments);
++	ctx->job.segments = NULL;
+ 	return ret;
+ }
+ 

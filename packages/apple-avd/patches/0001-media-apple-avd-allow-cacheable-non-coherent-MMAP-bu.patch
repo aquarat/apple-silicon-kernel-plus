@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
-Date: Sat, 05 Sep 2026 18:23:54 +0000
+Date: Sat, 5 Sep 2026 18:23:54 +0000
 Subject: [PATCH 1/4] media: apple: avd: allow cacheable (non-coherent) MMAP
  buffers
 
@@ -62,10 +62,10 @@ Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
  1 file changed, 2 insertions(+)
 
 diff --git a/avd-drv.c b/avd-drv.c
-index c856a86..88b3be0 100644
+index 1a376cc..5f0e4a0 100644
 --- a/avd-drv.c
 +++ b/avd-drv.c
-@@ -320,6 +320,7 @@ static int avd_queue_init(void *priv, struct vb2_queue *src_vq,
+@@ -322,6 +322,7 @@ static int avd_queue_init(void *priv, struct vb2_queue *src_vq,
  	src_vq->lock = &ctx->dev->vdev_lock;
  	src_vq->dev = ctx->dev->v4l2_dev.dev;
  	src_vq->supports_requests = true;
@@ -73,7 +73,7 @@ index c856a86..88b3be0 100644
  
  	ret = vb2_queue_init(src_vq);
  	if (ret)
-@@ -336,6 +337,7 @@ static int avd_queue_init(void *priv, struct vb2_queue *src_vq,
+@@ -338,6 +339,7 @@ static int avd_queue_init(void *priv, struct vb2_queue *src_vq,
  	dst_vq->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY;
  	dst_vq->lock = &ctx->dev->vdev_lock;
  	dst_vq->dev = ctx->dev->v4l2_dev.dev;

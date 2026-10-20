@@ -29,9 +29,6 @@
 
 #define H264_TRANSFORM_8X8_MODE(v)		FIELD_PREP(BIT(7), !!(v))
 
-/* not a hardware constraint */
-#define MAX_SLICES	4096
-
 struct avd_h264_run {
 	struct avd_run base;
 
@@ -59,9 +56,10 @@ struct avd_h264_ctx {
 		struct v4l2_h264_reference b1[V4L2_H264_REF_LIST_LEN];
 	} reflists;
 
-	struct avd_buf slices[MAX_SLICES];
+	struct avd_buf *slices;
 	struct avd_buf *active_slice;
 	size_t slice_num;
+	size_t alloc_slice_num;
 
 	struct avd_h264_bufs {
 		struct avd_buf inst;
@@ -605,6 +603,15 @@ static int avd_h264_start(struct avd_ctx *ctx)
 
 	ctx->priv = h264_ctx;
 
+	/* assume one slice per row */
+	h264_ctx->alloc_slice_num =
+		ctrl->p_new.p_h264_sps->pic_height_in_map_units_minus1 + 1;
+	h264_ctx->slices =
+		kzalloc(sizeof(*h264_ctx->slices) * h264_ctx->alloc_slice_num,
+			GFP_KERNEL);
+	if (!h264_ctx->slices)
+		goto err_free_ctx;
+
 	ret = avd_h264_alloc_bufs(ctx);
 	if (ret)
 		goto err_free_ctx;
@@ -636,7 +643,7 @@ static void avd_h264_stop(struct avd_ctx *ctx)
 
 	for (i = 0; i < h264_ctx->slice_num; i++)
 		avd_buf_free(dev, &h264_ctx->slices[i]);
-
+	kfree(h264_ctx->slices);
 	kfree(h264_ctx);
 }
 
@@ -719,6 +726,42 @@ static bool avd_h264_refs_valid(const struct avd_h264_run *run)
 	return true;
 }
 
+static int avd_h264_realloc_slices(struct avd_ctx *ctx)
+{
+	struct avd_h264_ctx *h264_ctx = ctx->priv;
+	void *tmp;
+	size_t alloc_slice_num;
+
+	tmp = h264_ctx->slices;
+	alloc_slice_num = (h264_ctx->alloc_slice_num * 3) / 2;
+	h264_ctx->slices = kzalloc(sizeof(*h264_ctx->slices) * alloc_slice_num,
+				   GFP_KERNEL);
+	if (!h264_ctx->slices) {
+		/* make deallocating a little easier */
+		h264_ctx->slices = tmp;
+		return -ENOMEM;
+	}
+
+	h264_ctx->alloc_slice_num = alloc_slice_num;
+	memcpy(h264_ctx->slices, tmp,
+	       sizeof(*h264_ctx->slices) * h264_ctx->slice_num);
+	kfree(tmp);
+
+	tmp = ctx->job.segments;
+	ctx->job.segments = kvcalloc(alloc_slice_num + 1,
+				     sizeof(*ctx->job.segments), GFP_KERNEL);
+	if (!ctx->job.segments) {
+		ctx->job.segments = tmp;
+		return -ENOMEM;
+	}
+
+	memcpy(ctx->job.segments, tmp,
+	       sizeof(*ctx->job.segments) * (ctx->job.num + 1));
+	kvfree(tmp);
+
+	return 0;
+}
+
 static int avd_h264_run(struct avd_ctx *ctx)
 {
 	struct avd_h264_ctx *h264_ctx = ctx->priv;
@@ -727,12 +770,12 @@ static int avd_h264_run(struct avd_ctx *ctx)
 	int ret;
 
 	avd_h264_run_preamble(ctx, &run);
-	if (h264_ctx->slice_num >= MAX_SLICES) {
-		dev_err_ratelimited(ctx->dev->dev,
-				    "slice_num > %d, stream was rejected!",
-				    MAX_SLICES);
-		avd_run_postamble(ctx, &run.base);
-		return -EINVAL;
+
+	if (ctx->job.segments &&
+	    h264_ctx->slice_num >= h264_ctx->alloc_slice_num) {
+		ret = avd_h264_realloc_slices(ctx);
+		if (ret)
+			goto err_free_jobs;
 	}
 
 	struct vb2_v4l2_buffer *src = v4l2_m2m_next_src_buf(ctx->fh.m2m_ctx);
@@ -740,10 +783,8 @@ static int avd_h264_run(struct avd_ctx *ctx)
 	const u8 *data = vb2_plane_vaddr(&src->vb2_buf, 0);
 	h264_ctx->active_slice = &h264_ctx->slices[h264_ctx->slice_num];
 	ret = avd_buf_alloc(ctx->dev, h264_ctx->active_slice, payload_len);
-	if (ret) {
-		avd_run_postamble(ctx, &run.base);
-		return ret;
-	}
+	if (ret)
+		goto err_free_jobs;
 	memcpy(h264_ctx->active_slice->cpu, data, payload_len);
 	h264_ctx->slice_num++;
 
@@ -767,7 +808,8 @@ static int avd_h264_run(struct avd_ctx *ctx)
 	}
 
 	if (is_new_frame(run.slice_params)) {
-		ret = avd_init_job(ctx, AVD_CODEC_H264, MAX_SLICES);
+		ret = avd_init_job(ctx, AVD_CODEC_H264,
+				   h264_ctx->alloc_slice_num + 1);
 		if (ret)
 			return ret;
 		stream_hdr(ctx, &run);
@@ -785,6 +827,18 @@ static int avd_h264_run(struct avd_ctx *ctx)
 	}
 
 	return avd_submit_job(ctx);
+
+err_free_jobs:
+	/*
+	 * Complete the request (later requests on the context fail with EBUSY
+	 * otherwise) and drop the frame's job: the remaining slices of this
+	 * frame are refused by the !ctx->job.segments check until the next
+	 * frame starts a new job.
+	 */
+	avd_run_postamble(ctx, &run.base);
+	kvfree(ctx->job.segments);
+	ctx->job.segments = NULL;
+	return ret;
 }
 
 static void avd_h264_done(struct avd_ctx *ctx, struct vb2_v4l2_buffer *src_buf,

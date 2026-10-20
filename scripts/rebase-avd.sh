@@ -1,14 +1,16 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
-# Rebase the apple-avd driver onto another Fedora Asahi kernel.
+# Rebase the apple-avd driver onto another kernel (this project's or @asahi's).
 #
-#   scripts/rebase-avd.sh [<kernel NVR> | <kernel-*.src.rpm>] [WORKDIR]
-#     e.g. scripts/rebase-avd.sh 7.1.14-400.asahi.fc44
-#     default NVR: the newest kernel published by @asahi (scripts/asahi-kernel.py)
+#   scripts/rebase-avd.sh [<kernel-*.src.rpm> | <@asahi kernel NVR>] [WORKDIR]
+#     e.g. scripts/rebase-avd.sh out/kernel-7.2.11-900.asahiwip.plus1.fc44.src.rpm
+#     default: this project's kernel SRPM, made with scripts/make-srpm.sh kernel
+#     an NVR such as 7.1.13-402.asahi.fc44: that @asahi kernel (scripts/asahi-kernel.py)
 #     default WORKDIR: <repo>/.cache/rebase-avd
 #
-# 1. gets the kernel SRPM, extracts linux-<ver>.tar.xz and applies Fedora's
-#    patch-<major>-redhat.patch (the Asahi tree is in it);
+# 1. gets the kernel SRPM, extracts linux-<ver>.tar.xz and applies
+#    patch-<major>-redhat.patch (the Asahi tree is in it, in this project's
+#    SRPM as in @asahi's);
 # 2. writes WORKDIR/apple-avd-<nvr>/ = drivers/media/platform/apple/avd/ plus
 #    our out-of-tree Makefile/Kbuild/.gitignore from packages/apple-avd/src,
 #    commits that as "pristine", then `git am`s packages/apple-avd/patches/*.
@@ -31,8 +33,12 @@ WORK=$(cd "$WORK" && pwd)
 
 if [ -f "$arg" ]; then
     srpm=$(cd "$(dirname "$arg")" && pwd)/$(basename "$arg")
+elif [ -n "$arg" ]; then
+    srpm=$(python3 "$HERE/scripts/asahi-kernel.py" fetch "$arg" "$HERE/.cache/asahi-kernel")
 else
-    srpm=$(python3 "$HERE/scripts/asahi-kernel.py" fetch ${arg:+"$arg"} "$HERE/.cache/asahi-kernel")
+    rm -rf "$WORK/kernel-srpm"
+    "$HERE/scripts/make-srpm.sh" kernel "$WORK/kernel-srpm" >&2
+    srpm=$(ls "$WORK"/kernel-srpm/kernel-*.src.rpm)
 fi
 nvr=$(basename "$srpm" .src.rpm); nvr=${nvr#kernel-}
 ver=${nvr%%-*}                       # 7.1.13
