@@ -3,7 +3,7 @@
 # Apple M1 Pro/Max/Ultra with this project's kernel (pcie-apple-apciec).
 # 60-apciec-nvme-apst.rules is github.com/aquarat/apple-silicon-thunderbolt-linux
 # udev/ at the commit below.
-%global tb_commit 0238ce0
+%global tb_commit dfbc506
 
 Name:           apple-silicon-thunderbolt
 Version:        1.0
@@ -38,4 +38,4 @@ install -Dpm0644 60-apciec-nvme-apst.rules %{buildroot}%{_udevrulesdir}/60-apcie
 
 %changelog
 * Tue Oct 20 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 1.0-1
-- First package: the NVMe APST rule from apple-silicon-thunderbolt-linux 0238ce0.
+- First package: the NVMe APST rule from apple-silicon-thunderbolt-linux dfbc506.

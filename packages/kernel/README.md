@@ -85,7 +85,7 @@ The Asahi tree has the Thunderbolt/USB4 host router driver
 (`thunderbolt_apple`, `reset-apple-cio`) but no driver for the PCIe
 controllers that carry PCIe tunnels (APCIEC). Patches 0010-0013 add it, from
 [aquarat/apple-silicon-thunderbolt-linux](https://github.com/aquarat/apple-silicon-thunderbolt-linux)
-(`patches/`, commit 0238ce0):
+(`patches/`, commit dfbc506):
 
 - 0010: DT binding `apple,t6000-apciec`;
 - 0011: the `pcie-apple-apciec` driver (`CONFIG_PCIE_APPLE_APCIEC=m`, in
