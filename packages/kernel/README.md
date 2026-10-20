@@ -101,9 +101,9 @@ that repository (its `scripts/make-patches.sh` regenerates it for a new
 base) and bump the release as `Kernel release naming` says. Known issues and
 limits are in that repository's README.
 
-### Thunderbolt networking (thunderbolt-net), patches 0020-0025
+### Thunderbolt networking (thunderbolt-net), patches 0020-0026
 
-`patches/tb-net/` of the same repository (commit 7901e85), for IP over a
+`patches/tb-net/` of the same repository (commit a71c646), for IP over a
 USB4/Thunderbolt cable between two Macs (or a Mac and another host):
 
 - 0020, 0021: end-to-end flow control on the transmit ring too, for the
@@ -118,6 +118,11 @@ USB4/Thunderbolt cable between two Macs (or a Mac and another host):
 - 0025: a per-machine host router UID. m1n1 passes on placeholder UIDs that
   are the same on every Mac of a family, so two Macs cabled between the
   same port number collided (same XDomain UUID, same thunderbolt-net MAC).
+- 0026: packets from a peer with TSO on arrive larger than the MTU; they
+  are now marked as GSO packets, so a bridge or router can forward them to
+  a normal-MTU interface (before, a Mac bridged to a LAN through another
+  Mac crawled at about 1 Mbit/s unless TSO was off on it; not
+  Apple-specific).
 
 Measured Mac Studio M1 Max to MacBook Pro M1 Max: 21 Gb/s single stream,
 14-15 Gb/s each way bidirectional, at MTU 1500 or 65522, no lost frames.

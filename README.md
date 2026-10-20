@@ -30,7 +30,7 @@ As the sources state; "tested" means on at least one machine of that SoC.
 
 | package | SoCs |
 |---|---|
-| kernel | what the Asahi tree supports (M1 and M2 families). Thunderbolt/USB4: the Asahi tree's device trees describe it for t8103, t8112 and t600x; USB3 tunnels and XDomain (thunderbolt-net, with this project's flow-control, page-pool and per-machine UID patches; tested Mac-to-Mac on t6001); PCIe tunnels on t600x with `pcie-apple-apciec` (tested on t6001, Mac Studio port 3, NVMe enclosure; known issues in [apple-silicon-thunderbolt-linux](https://github.com/aquarat/apple-silicon-thunderbolt-linux#status-and-known-issues)); no DisplayPort tunnels. The KVM patches act only on CPUs with Apple's ACTLR virtualization (M1: t8103, t6000, t6001, t6002; M2: t8112, t6020, t6021, t6022); tested on t6001 |
+| kernel | what the Asahi tree supports (M1 and M2 families). Thunderbolt/USB4: the Asahi tree's device trees describe it for t8103, t8112 and t600x; USB3 tunnels and XDomain (thunderbolt-net, with this project's flow-control, page-pool, per-machine UID and forwarding patches; tested Mac-to-Mac on t6001, also through a bridge); PCIe tunnels on t600x with `pcie-apple-apciec` (tested on t6001, Mac Studio port 3, NVMe enclosure; known issues in [apple-silicon-thunderbolt-linux](https://github.com/aquarat/apple-silicon-thunderbolt-linux#status-and-known-issues)); no DisplayPort tunnels. The KVM patches act only on CPUs with Apple's ACTLR virtualization (M1: t8103, t6000, t6001, t6002; M2: t8112, t6020, t6021, t6022); tested on t6001 |
 | dkms-apple-avd | M1 family (t8103, t6000, t6001, t6002); t8112: H.264 works, HEVC times out (open) |
 | apple-ave | t6000, t8103 (H.264 without B frames), t8112; t6001 and t6002 after enabling them (not yet run in this configuration). All with the macOS 13.5 system firmware |
 | mesa-honeykrisp-plus | M1 and M2 GPUs, as Mesa's Asahi driver |
@@ -67,7 +67,8 @@ The kernel is `<Linux version>-<N>.asahiwip.plus<M>.fc44`:
 | stock `@asahi` | `7.1.13-402.asahi.fc44` | `7.1.13-402.asahi.fc44.aarch64+16k` |
 | this project, up to 7.1.13 | `7.1.13-402.asahi.plus1.fc44` | `7.1.13-402.asahi.plus1.fc44.aarch64+16k` |
 | this project, 7.2.11 before Thunderbolt networking | `7.2.11-900.asahiwip.plus1.fc44` | `7.2.11-900.asahiwip.plus1.fc44.aarch64+16k` |
-| this project now | `7.2.11-900.asahiwip.plus2.fc44` | `7.2.11-900.asahiwip.plus2.fc44.aarch64+16k` |
+| this project, 7.2.11 with Thunderbolt networking | `7.2.11-900.asahiwip.plus2.fc44` | `7.2.11-900.asahiwip.plus2.fc44.aarch64+16k` |
+| this project now | `7.2.11-900.asahiwip.plus3.fc44` | `7.2.11-900.asahiwip.plus3.fc44.aarch64+16k` |
 
 - The version is the Linux release the pinned Asahi commit is based on
   (`KERNEL_VERSION` in `packages/kernel/kernel-plus.conf`).
