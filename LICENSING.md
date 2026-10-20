@@ -12,7 +12,7 @@ Our scripts carry `SPDX-License-Identifier: GPL-2.0-only` headers.
 
 | package | licence (RPM `License:` tag) | notes |
 |---|---|---|
-| kernel | `GPL-2.0-only` | Fedora Asahi Remix kernel; the `kernel.spec` tag is `@asahi`'s, unchanged |
+| kernel | `GPL-2.0-only` | the Asahi Linux kernel tree with Fedora's kernel patch; the `License:` tag is that of Fedora's `kernel.spec`, unchanged |
 | apple-avd | `GPL-2.0-only AND MIT AND BSD-2-Clause` | see below |
 | apple-ave | `GPL-2.0-only` | all source files carry `GPL-2.0-only` |
 | mesa-honeykrisp-plus | `MIT` | the Asahi Vulkan driver part of Mesa is MIT |
@@ -33,11 +33,13 @@ patch names him as its author (`From:`) and names its origin; it carries
 no sign-off, as he has not given one. If he
 objects to its distribution, the patch will be withdrawn.
 
-`0002-KVM-arm64-emulate-MMIO-ldst-without-ISV.patch` is this project's work.
+`0002-KVM-arm64-emulate-MMIO-ldst-without-ISV.patch` and
+`0003-net-atlantic-atl2-keep-station-MAC-uc-filter-enabled.patch` are this
+project's work.
 
 ## apple-avd
 
-The driver is the Fedora Asahi kernel's `drivers/media/platform/apple/avd`:
+The driver is the Asahi Linux kernel tree's `drivers/media/platform/apple/avd`, as this project's kernel ships it:
 
 | files | licence |
 |---|---|

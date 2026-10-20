@@ -4,22 +4,31 @@ This project packages and patches other people's work.
 
 ## Kernel
 
-- **Fedora Asahi SIG** and the **Asahi Linux contributors**: the Fedora
-  Asahi Remix kernel, its spec and the `@asahi/kernel` COPR that this
-  project rebuilds. This project changes only what `packages/kernel`
-  describes.
+- **The Asahi Linux contributors**: the
+  [AsahiLinux/linux](https://github.com/AsahiLinux/linux) kernel tree this
+  project's kernel is built from (its `asahi-wip` branch), with the Apple
+  silicon drivers and device trees. This includes **Sven Peter**'s
+  Thunderbolt/USB4 series for Apple silicon and the work it builds on;
+  the authorship of every change is in the tree's commits, and this
+  project's patch files do not restate it.
+- **Fedora Asahi SIG**: the Fedora Asahi Remix kernel and the
+  `@asahi/kernel` COPR, whose configuration choices (`packages/kernel/configs/asahi-*.config`),
+  16k variant and module placement this project's kernel keeps.
+- **Fedora's kernel maintainers**: `kernel.spec`, its scripts and configs,
+  and Fedora's kernel patch, used from Fedora's kernel SRPM.
 - **Anees Iqbal** ([steelbrain](https://github.com/steelbrain)): the work in
   [steelbrain/experiment-macOS-arm64-on-asahi-linux-arm64](https://github.com/steelbrain/experiment-macOS-arm64-on-asahi-linux-arm64)
   that first ran macOS guests under KVM on Asahi Linux, including the Linux
   6.19 patch for Apple's PAuth virtualization state. Kernel patch 0001 is a
-  rebase of that patch onto the Fedora Asahi 7.1 kernel; the code changes
-  are his. The patch names him as its author (`From:`) and
-  names its origin.
-- Kernel patch 0002 (no-syndrome MMIO emulation) is this project's work.
+  rebase of that patch onto the Fedora Asahi 7.1 kernel and then onto
+  Linux 7.2; the code changes are his. The patch names him as its author
+  (`From:`) and names its origin.
+- Kernel patches 0002 (no-syndrome MMIO emulation) and 0003 (atlantic
+  AQC113 unicast filter fix) are this project's work.
 
 ## apple-avd
 
-The driver is the Asahi Linux AVD driver as Fedora's kernel ships it
+The driver is the Asahi Linux AVD driver as the Asahi kernel tree has it
 (copyright the Asahi Linux contributors, Eileen Yoon and the authors named
 in each file, which also include Collabora, Rockchip, Google, Samsung and
 the Alliance for Open Media). This project adds four fixes.

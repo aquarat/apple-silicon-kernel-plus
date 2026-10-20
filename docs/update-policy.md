@@ -5,33 +5,44 @@ of response times.
 
 ## kernel
 
-- The kernel follows `@asahi/kernel`: every build is `@asahi`'s newest
-  published kernel SRPM for `fedora-44-aarch64`, plus this project's
-  patches and build settings.
-- A scheduled workflow runs daily. When `@asahi` has published a newer
-  kernel than this project's newest build, it checks that the patches apply
-  and starts a COPR build. A kernel build in COPR takes several hours.
-- Until that build is published, `dnf upgrade` offers `@asahi`'s newer
-  kernel, which has no KVM patches. Users who need the patches can give this
-  COPR a higher priority (README, Kernel release naming); dnf then waits for
-  this project's build.
-- If the patches no longer apply, there is no build until they are rebased.
-  The workflow fails visibly. Users stay on the last kernel built here, or
-  move to `@asahi`'s, depending on repository priority.
-- A failed COPR build for the same `@asahi` release is not retried
-  automatically.
-- Security fixes reach this kernel when `@asahi` ships them; there are no
-  separate security updates.
+- The kernel is the Asahi Linux kernel tree at one commit of its
+  `asahi-wip` branch, pinned in `packages/kernel/kernel-plus.conf`
+  together with the Linux release it is based on and the Fedora kernel
+  SRPM of that release. It is **experimental**: `asahi-wip` is Asahi's
+  integration branch, not a release.
+- It does not follow upstream by itself. `asahi-wip` is rebased often (onto
+  each stable release, with work in progress), and not every state of it
+  is one to ship. A maintainer moves the pin by hand, after the new commit
+  has booted and run on test machines (Thunderbolt, 10GbE, KVM guests), and
+  after the patches and configs are rebased (docs/maintainer-guide.md).
+- A scheduled workflow (`kernel-watch`) runs daily. It starts a COPR build
+  when `kernel-plus.conf` on the default branch names a release the project
+  has not built (that is, after a bump is merged) and its prep check
+  passes. It also reports, as workflow warnings, what a maintainer should
+  look at: `asahi-wip` moved; kernel.org has a newer stable release of the
+  kernel's series; `@asahi` publishes a kernel that sorts above this
+  project's (users without the repository priority would get it).
+- A failed COPR build of the same release is not retried automatically.
+- Stable and security fixes arrive only with a bump of the pin, in practice
+  when `asahi-wip` moves to a newer stable release. There are no separate
+  security updates, and between bumps this kernel can be behind both
+  kernel.org and `@asahi`. If that matters to you, use `@asahi`'s kernel.
+- When `@asahi` ships a kernel of the same or a newer series that has
+  what this project needs (Thunderbolt/USB4 in particular), the kernel goes
+  back to being a rebuild of `@asahi`'s (scripts/asahi-kernel.py still
+  finds those SRPMs).
 - Kernels are install-only; dnf keeps the previous ones (default:
-  `installonly_limit=3`).
+  `installonly_limit=3`). Booting a 7.1 kernel while a 7.2 kernel is
+  installed needs the device-tree step in README.md, Rollback.
 
 ## dkms-apple-avd
 
-- DKMS builds it for every installed 7.1 Fedora Asahi kernel with its
-  `-devel` package.
-- When `@asahi` moves to a new kernel series, DKMS skips the module for that
-  series and the in-tree decoder is used, until this project rebases the
-  driver (maintainer guide). The in-tree driver has the problems the patches
+- DKMS builds it for every installed 7.2 kernel from this project with
+  its `-devel` package (`BUILD_EXCLUSIVE_KERNEL`); kernels of other series
+  (the 7.1 kernels) use their in-tree decoder.
+- When this project's kernel moves to a new kernel series, DKMS skips the
+  module for that series and the in-tree decoder is used, until this
+  project rebases the driver (maintainer guide). The in-tree driver has the problems the patches
   fix (for example, H.264 streams stop after 4096 slices).
 
 ## apple-ave (experimental)
@@ -59,5 +70,6 @@ of response times.
 ## Fedora releases
 
 - Built for Fedora 44 (`fedora-44-aarch64`), the release `@asahi` and Fedora
-  Asahi Remix currently target. Other releases are added when they matter;
-  Mesa needs a matching version per release.
+  Asahi Remix currently target. The kernel uses Fedora 44's kernel SRPM.
+  Other releases are added when they matter; Mesa needs a matching version
+  per release, and the kernel that release's kernel SRPM.
