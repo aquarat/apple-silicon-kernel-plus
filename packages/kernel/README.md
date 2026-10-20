@@ -101,6 +101,29 @@ that repository (its `scripts/make-patches.sh` regenerates it for a new
 base) and bump the release as `Kernel release naming` says. Known issues and
 limits are in that repository's README.
 
+### Thunderbolt networking (thunderbolt-net), patches 0020-0025
+
+`patches/tb-net/` of the same repository (commit 7901e85), for IP over a
+USB4/Thunderbolt cable between two Macs (or a Mac and another host):
+
+- 0020, 0021: end-to-end flow control on the transmit ring too, for the
+  Apple NHI only (`tb_nhi::tx_e2e`). The Apple NHI's transmit ring ignores
+  the receiver's credits otherwise, and frames are lost whenever the
+  receiver falls behind;
+- 0022: the t600x USB4 NHIs are DMA coherent (`dma-coherent`);
+- 0023: a lost Tx queue wakeup in `thunderbolt_net` (the interface could
+  stop sending for good; not Apple-specific);
+- 0024: a page pool for `thunderbolt_net`'s receive buffers (the
+  receiving CPU was the limit at 7-8 Gb/s; not Apple-specific);
+- 0025: a per-machine host router UID. m1n1 passes on placeholder UIDs that
+  are the same on every Mac of a family, so two Macs cabled between the
+  same port number collided (same XDomain UUID, same thunderbolt-net MAC).
+
+Measured Mac Studio M1 Max to MacBook Pro M1 Max: 21 Gb/s single stream,
+14-15 Gb/s each way bidirectional, at MTU 1500 or 65522, no lost frames.
+`apple-silicon-thunderbolt` has the udev rule that goes with them (threaded
+NAPI and GRO off on thunderbolt-net interfaces).
+
 ## Thunderbolt in this kernel
 
 - `thunderbolt_apple` (the Apple host router driver, `USB4_APPLE_SOC=m`)
