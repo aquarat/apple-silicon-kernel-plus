@@ -153,6 +153,9 @@ build_kernel() {
     if ! "${G[@]}" cat-file -e "$ASAHI_COMMIT^{commit}" 2>/dev/null; then
         log "fetch $ASAHI_COMMIT from ${ASAHI_GIT:-$ASAHI_REPO}"
         "${G[@]}" fetch -q --depth 1 "${ASAHI_GIT:-$ASAHI_REPO}" "$ASAHI_COMMIT" ||
+            { [ -z "${ASAHI_GIT:-}" ] && [ -n "${ASAHI_MIRROR:-}" ] &&
+              log "not in $ASAHI_REPO; fetch from the mirror $ASAHI_MIRROR" &&
+              "${G[@]}" fetch -q --depth 1 "$ASAHI_MIRROR" "$ASAHI_COMMIT"; } ||
             die "cannot fetch $ASAHI_COMMIT (packages/kernel/README.md: if the commit is gone)"
         "${G[@]}" cat-file -e "$ASAHI_COMMIT^{commit}" || die "fetch did not give $ASAHI_COMMIT"
     fi

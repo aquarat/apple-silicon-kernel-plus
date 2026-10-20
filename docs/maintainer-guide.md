@@ -105,8 +105,19 @@ tree, the conflicting files are usually the few that both change
 copy of Fedora's patch in `packages/kernel/`, make `build_kernel` use it
 instead of the SRPM's, and say so in `packages/kernel/README.md`.
 
-If the pinned commit disappears from GitHub, set `ASAHI_GIT` to a clone
-that has it (any local clone that fetched it), or move to a newer commit.
+Every commit we build from is also kept in this project's fork
+(`ASAHI_MIRROR`, https://github.com/aquarat/linux) under the tag
+`plus/asahi-wip-<version>-<commit12>`, and `make-srpm.sh` fetches from there
+when the Asahi tree no longer has it. When you pin a new commit, push that
+tag before merging the bump:
+
+```sh
+git fetch --depth 1 https://github.com/AsahiLinux/linux.git <commit>
+git tag -a plus/asahi-wip-<version>-<commit12> -m "Pinned base of kernel <version>-<release>" FETCH_HEAD
+git push git@github.com:aquarat/linux.git refs/tags/plus/asahi-wip-<version>-<commit12>
+```
+
+`ASAHI_GIT` still overrides both (any local clone that has the commit).
 
 ### Patches only, same Asahi commit
 
