@@ -5,10 +5,10 @@
 # firmware/ave_fwgen.py is that repository's tools/ave_fwgen.py.
 # See README.md. No Apple firmware, and no data taken from Apple's files, is
 # in this package: apple-ave-fetch-firmware makes them on the user's machine.
-%global ave_commit 057c5df
+%global ave_commit 9ab14e4
 
 Name:           apple-ave
-Version:        0.99.4
+Version:        0.99.5
 Release:        1%{?dist}
 Summary:        EXPERIMENTAL Apple AVE H.264/HEVC video encoder driver
 License:        GPL-2.0-only
@@ -135,6 +135,12 @@ dkms remove -m apple-ave -v %{version} --all --rpm_safe_upgrade >/dev/null 2>&1 
 %{_libexecdir}/apple-ave/ave-load
 
 %changelog
+* Tue Oct 20 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 0.99.5-1
+- AVE driver commit 9ab14e4. The upstream history was rewritten and 057c5df
+  no longer exists; its equivalent there is 508c279 (the same driver/ and
+  test/ trees as 0.99.4). 9ab14e4 changes only comments in ave_drv.c and
+  ave_session.c (commit ids of the rewritten history); no code change.
+
 * Sat Oct 10 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 0.99.4-1
 - AVE driver commit 057c5df: no data from Apple's files in the source; the
   AVE_DPE tables are generated on the user's machine and loaded at run time,

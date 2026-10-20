@@ -12,7 +12,7 @@ hang the encoder or the machine. Do not use it where that matters. Why it
 is still experimental, per SoC, and what would change that: [Status](#status).
 
 Upstream: [aquarat/apple-m-series-ave-driver](https://github.com/aquarat/apple-m-series-ave-driver),
-commit `057c5df`. Its `docs/` describe how each part was found and tested.
+commit `9ab14e4`. Its `docs/` describe how each part was found and tested.
 
 ## Packages
 
