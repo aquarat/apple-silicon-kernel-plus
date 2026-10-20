@@ -44,10 +44,12 @@ sources note.
 The Mesa developers, in particular the authors of the Asahi Vulkan driver
 (Honeykrisp). This project adds two patches.
 
-## qemu-vmapple
+## qemu-vmapple and reims-vgpu-backend
 
-- The QEMU developers, including the `vmapple` machine in upstream QEMU.
-- Reims, the paravirtual GPU, is
+- The QEMU developers, including the `vmapple` machine in upstream QEMU,
+  and Mohamed Mediouni's vmapple series for recent macOS releases, which
+  the QEMU fork carries.
+- Reims, the paravirtual GPU (reims-vgpu-backend), is
   [steelbrain-bot/reims-vgpu](https://github.com/steelbrain-bot/reims-vgpu)
   by Anees Iqbal and contributors; all credit for the device, its design and
   the Metal-to-Vulkan path goes to its authors. This project builds the
@@ -55,8 +57,8 @@ The Mesa developers, in particular the authors of the Asahi Vulkan driver
   [aquarat/qemu-reims-vgpu](https://github.com/aquarat/qemu-reims-vgpu) and
   [aquarat/metal2vulkan](https://github.com/aquarat/metal2vulkan), which add
   what an Asahi Linux host needs.
-- The authors of the Rust crates vendored into the SRPM; each crate's
-  licence file names them.
+- The authors of the Rust crates vendored into the reims-vgpu-backend
+  SRPM; each crate's licence file names them.
 
 ## Firmware tooling
 

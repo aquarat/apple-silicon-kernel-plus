@@ -8,10 +8,13 @@ Filters = [
     'devel-file-in-non-devel-package /usr/src/',
     'only-non-binary-in-usr-lib',
     # Sources made by scripts/make-srpm.sh have no download URL.
-    'invalid-url Source[0-9]+: (apple-av[de]|reims-vgpu|qemu-vmapple)',
+    'invalid-url Source[0-9]+: (apple-av[de]|reims-vgpu|qemu-reims-vgpu|qemu-vmapple)',
     # Nothing to test at build time: DKMS builds on the target.
     'no-%check-section',
     'empty-%postun',
     # apple-ave-fetch-firmware documents itself (--help, apple-ave-firmware.md).
     'no-manual-page-for-binary apple-ave-fetch-firmware',
+    # qemu-vmapple and reims-vgpu-backend: their READMEs document them; QEMU's
+    # own manual is not built (--disable-docs).
+    'no-manual-page-for-binary (qemu-vmapple|reims-vgpu-backend)',
 ]

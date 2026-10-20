@@ -211,24 +211,36 @@ When Fedora updates `mesa-vulkan-drivers` for the target release:
 
 ## Bumping Reims / QEMU
 
+The two are separate packages, built from separate repositories:
+
 ```sh
-git ls-remote https://github.com/aquarat/reims-vgpu.git refs/heads/master    # the commit
-# its pinned QEMU: the vendor/qemu gitlink at that commit
+git ls-remote https://github.com/aquarat/qemu-reims-vgpu.git refs/heads/master   # qemu-vmapple
+git ls-remote https://github.com/aquarat/reims-vgpu.git refs/heads/master        # reims-vgpu-backend
 ```
 
-In `qemu-vmapple.spec` set `reims_commit` (full id), `qemu_commit` (the
-`vendor/qemu` gitlink; `make-srpm.sh` refuses a mismatch), `reims_date`
-(the commit date, YYYYMMDD), `qemu_version` (QEMU's `VERSION` file), reset
-`Release` to 1, add a changelog entry. Then
-`scripts/build-srpms.sh qemu-vmapple`. If QEMU now needs other meson
-subprojects, add them to the `meson subprojects download` line in
-`scripts/make-srpm.sh`; the offline build fails with `--disable-download`
-otherwise.
+- `qemu-vmapple.spec`: `qemu_commit` (full id), `qemu_date` (the commit
+  date, YYYYMMDD), `qemu_version` (QEMU's `VERSION` file; `make-srpm.sh`
+  checks it). If QEMU now needs other meson subprojects, add them to the
+  `meson subprojects download` line in `scripts/make-srpm.sh`; the offline
+  build fails with `--disable-download` otherwise.
+- `reims-vgpu-backend.spec`: `reims_commit` (full id), `reims_date`,
+  `crate_version` (`crates/reims-vgpu-backend/Cargo.toml`). If
+  `make-srpm.sh` reports a crate licence that is not in the `License` tag,
+  add it (and to LICENSING.md if it is a new kind).
+- `apv_protocol` in both specs: `APV_PROXY_VERSION` in
+  `apv-gpu-proxy-protocol.h`. `make-srpm.sh` refuses a mismatch with the
+  header. When it changes, release both packages together.
+
+Reims' `vendor/qemu` submodule pins the last QEMU commit with the
+in-process device; it is not used here. Reset `Release` to 1, add a
+changelog entry, then `scripts/build-srpms.sh qemu-vmapple
+reims-vgpu-backend`. Before a release, run a guest with the GPU on the
+pair (`GPU_BACKEND_BIN`, see packages/qemu-vmapple/README.md).
 
 ## COPR
 
 `scripts/copr-setup.sh` (once) creates the project with the
-`fedora-44-aarch64` chroot and five SCM packages using the `make_srpm`
+`fedora-44-aarch64` chroot and seven SCM packages using the `make_srpm`
 method. The SRPM step has network access in COPR; the RPM builds do not
 need it, so "enable internet" stays off.
 

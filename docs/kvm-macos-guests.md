@@ -63,5 +63,30 @@ dmesg | grep -E "ACTLR virtualization|VHE mode"
 QEMU: `qemu-vmapple` (this project). The VM tooling (restore, golden
 images, runners) is in
 [aquarat/apple-macos-arm64-vm-guest](https://github.com/aquarat/apple-macos-arm64-vm-guest).
-With the Reims GPU, run QEMU with `VK_DRIVER_FILES` pointing at
-`mesa-honeykrisp-plus` (`honeykrisp-plus qemu-vmapple ...`).
+
+The paravirtual GPU runs out of process, as on the production runners:
+`reims-vgpu-backend` serves QEMU's `apv-gpu-proxy` device over a unix
+socket and the guest's shared-memfd RAM, and uses the Vulkan driver from
+`mesa-honeykrisp-plus`. With the VM tooling, set
+
+```sh
+export QEMU_BIN=/usr/libexec/qemu-vmapple/qemu-system-aarch64        # vm-run.sh, launch-kvm.sh
+export GPU_BACKEND_BIN=/usr/libexec/qemu-vmapple/reims-vgpu-backend
+export $(honeykrisp-plus)                                            # VK_DRIVER_FILES
+# runner GPU slots (host profile): GPU_OOP_QEMU_BIN=<the QEMU above>, GPU_BACKEND_BIN=<the backend above>
+```
+
+and `launch-kvm.sh` starts one backend per guest, with `TMPDIR` set to
+`~/.cache/reims-vgpu` (Reims' pipeline cache) by `vm-run.sh`. By hand:
+
+```sh
+TMPDIR=~/.cache/reims-vgpu honeykrisp-plus reims-vgpu-backend --socket $XDG_RUNTIME_DIR/vm1.gpu &
+qemu-vmapple -machine vmapple,accel=kvm,memory-backend=ram,gfx-device=apv-gpu-proxy,aux-ram-share=on \
+    -object memory-backend-memfd,id=ram,size=16G,share=on \
+    -global apv-gpu-proxy.socket=$XDG_RUNTIME_DIR/vm1.gpu ...
+```
+
+If the backend dies, QEMU stops the guest with the reason
+(`apv-gpu-proxy.on-backend-loss=stop`, the default). Details:
+[packages/qemu-vmapple](../packages/qemu-vmapple/README.md#running-a-guest-with-the-gpu)
+and [packages/reims-vgpu-backend](../packages/reims-vgpu-backend/README.md).

@@ -1,14 +1,19 @@
 # qemu-vmapple
 
-QEMU with the `vmapple` machine and the Reims paravirtual GPU, for macOS
-guests under KVM on Apple silicon Linux hosts.
+QEMU with the `vmapple` machine, for macOS guests under KVM on Apple silicon
+Linux hosts. The paravirtual GPU runs out of process: QEMU's
+`apv-gpu-proxy` device forwards it to `reims-vgpu-backend`
+([packages/reims-vgpu-backend](../reims-vgpu-backend)), a separate program
+in its own package. This QEMU contains no Reims, metal2vulkan, Rust or
+Vulkan code and loads none.
 
 | | |
 |---|---|
 | binary | `/usr/libexec/qemu-vmapple/qemu-system-aarch64`, also `/usr/bin/qemu-vmapple` |
-| data | `/usr/share/qemu-vmapple` (keymaps, firmware blobs QEMU ships) |
-| sources | [aquarat/reims-vgpu](https://github.com/aquarat/reims-vgpu) at `reims_commit`, its `vendor/qemu` submodule = [aquarat/qemu-reims-vgpu](https://github.com/aquarat/qemu-reims-vgpu) at `qemu_commit` |
-| configuration | `aarch64-softmmu`, KVM, GTK, GnuTLS, slirp, `-Dreims_vgpu_backend=vulkan`; as `scripts/build-qemu.sh` in [apple-macos-arm64-vm-guest](https://github.com/aquarat/apple-macos-arm64-vm-guest) |
+| data | `/usr/share/qemu-vmapple`: keymaps, and `efi-virtio.rom` (virtio-net's option ROM), a link to Fedora's iPXE build (`ipxe-roms-qemu`). No other firmware: vmapple boots your AVPBooter |
+| source | [aquarat/qemu-reims-vgpu](https://github.com/aquarat/qemu-reims-vgpu) at `qemu_commit` |
+| configuration | `aarch64-softmmu`, KVM, GTK, GnuTLS, slirp, no Rust; as `MODE=oop scripts/build-qemu.sh` in [apple-macos-arm64-vm-guest](https://github.com/aquarat/apple-macos-arm64-vm-guest) |
+| GPU | `-M vmapple,gfx-device=apv-gpu-proxy`, served by `reims-vgpu-backend` (recommended by this package) |
 
 It does not conflict with Fedora's `qemu-*` packages: it owns only the paths
 above.
@@ -22,12 +27,65 @@ above.
    project, see [docs/kvm-macos-guests.md](../../docs/kvm-macos-guests.md).
    `qemu-vmapple-kvm-nisv`, which used to turn it on, is retired: it is
    now an empty package (see below).
-3. For the GPU: a Vulkan driver that handles the shaders Reims produces,
-   i.e. `mesa-honeykrisp-plus`, selected with `VK_DRIVER_FILES` in QEMU's
-   environment (`honeykrisp-plus qemu-vmapple …`).
+3. For the GPU: `reims-vgpu-backend`, and a Vulkan driver that handles the
+   shaders it produces, i.e. `mesa-honeykrisp-plus`, selected with
+   `VK_DRIVER_FILES` in the backend's environment. Without the GPU
+   (`gfx-device=none`) neither is needed.
 4. A macOS installation (restore image, AVPBooter, auxiliary storage). The
    VM tooling in apple-macos-arm64-vm-guest makes and runs those. This
    package contains no macOS software or Apple firmware.
+
+## Running a guest with the GPU
+
+The two programs must speak the same apv-gpu-proxy protocol version: this
+package recommends `apv-gpu-proxy-backend = <version>`, which
+`reims-vgpu-backend` provides. Guest RAM must be a shared memfd, so the
+backend can map it.
+
+With the VM tooling (what the production runners do), point its
+variables at the packaged programs:
+
+```sh
+# scripts/vm-run.sh / launch-kvm.sh
+export QEMU_BIN=/usr/libexec/qemu-vmapple/qemu-system-aarch64
+export GPU_BACKEND_BIN=/usr/libexec/qemu-vmapple/reims-vgpu-backend
+export $(honeykrisp-plus)                # VK_DRIVER_FILES: mesa-honeykrisp-plus's ICD file
+
+# runner host profile (forgejo-ephemeral-runner.sh): GPU slots
+GPU_OOP_QEMU_BIN=/usr/libexec/qemu-vmapple/qemu-system-aarch64
+GPU_BACKEND_BIN=/usr/libexec/qemu-vmapple/reims-vgpu-backend
+```
+
+`launch-kvm.sh` then starts the backend on a socket, supervises it (its
+log is `gpu-backend.log` beside QEMU's), and starts QEMU with
+`gfx-device=apv-gpu-proxy`; `vm-run.sh` gives both a persistent `TMPDIR`,
+`~/.cache/reims-vgpu`, where Reims keeps its Vulkan pipeline cache.
+Unsetting `GPU_BACKEND_BIN` alone is the runners' fallback to an
+in-process QEMU, which this package no longer is.
+
+By hand, the same thing:
+
+```sh
+mkdir -p ~/.cache/reims-vgpu
+sock=$XDG_RUNTIME_DIR/vm1.gpu            # a unix socket path: at most 107 bytes
+TMPDIR=~/.cache/reims-vgpu honeykrisp-plus \
+    reims-vgpu-backend --socket "$sock" >> gpu-backend.log 2>&1 &
+qemu-vmapple -cpu host -smp 8 -m 16G \
+    -object memory-backend-memfd,id=ram,size=16G,share=on \
+    -machine vmapple,uuid=<ECID>,accel=kvm,memory-backend=ram,gfx-device=apv-gpu-proxy,aux-ram-share=on \
+    -global apv-gpu-proxy.socket="$sock" \
+    -global apv-gpu-proxy.on-backend-loss=stop \
+    ...                                   # -bios, disks, network: see launch-kvm.sh
+```
+
+The backend serves one QEMU and exits when that QEMU goes away; start one
+backend per guest. If it dies (a host GPU driver crash, say), QEMU stops
+the guest and prints `apv-gpu-proxy: GPU backend lost: <reason>`;
+`on-backend-loss=reset` instead resets the guest onto a new backend
+listening on the same socket, and `shutdown` powers it off. Other
+settings (`REIMS_VGPU_MAX_REFRESH_HZ`, default 60, or `--max-refresh-hz`;
+`REIMS_VGPU_FRAME_PACING`) are in
+[packages/reims-vgpu-backend](../reims-vgpu-backend/README.md).
 
 ## qemu-vmapple-kvm-nisv (retired)
 
@@ -46,27 +104,28 @@ old version.
 COPR builds may not have network access, so `scripts/make-srpm.sh
 qemu-vmapple` puts everything into the SRPM:
 
-- `reims-vgpu-<commit>.tar.xz`: Reims and QEMU (no `.git`), with QEMU's
-  meson subprojects `keycodemapdb`, `berkeley-softfloat-3` and
+- `qemu-reims-vgpu-<commit>.tar.xz`: QEMU (no `.git`), with QEMU's meson
+  subprojects `keycodemapdb`, `berkeley-softfloat-3` and
   `berkeley-testfloat-3` downloaded. `dtc` and `slirp` come from Fedora.
-- `reims-vgpu-<commit>-vendor.tar.xz`: `cargo vendor` of Reims'
-  `Cargo.lock`, including the git dependency
-  [aquarat/metal2vulkan](https://github.com/aquarat/metal2vulkan), and the
-  source-replacement config that points cargo at it.
 
-The build runs cargo with `CARGO_NET_OFFLINE=true` and QEMU's configure
-with `--disable-download`.
+The build runs QEMU's configure with `--disable-download` and
+`--disable-rust`. `make-srpm.sh` refuses a QEMU commit that has no
+`apv-gpu-proxy` device or still has the in-process Reims device or its
+cargo build, and checks the spec's `apv_protocol` against the protocol
+header; the spec's `%check` checks the built binary (no Reims or Rust
+symbols, no Vulkan loader).
 
 ## Updating
 
-Set `reims_commit`, `qemu_commit` (the commit Reims pins in `vendor/qemu`;
-`make-srpm.sh` checks it), `reims_date` and `qemu_version` (QEMU's
-`VERSION`) in the spec, add a changelog entry, rebuild.
-docs/maintainer-guide.md has the steps.
+Set `qemu_commit` (full id), `qemu_date` (its commit date, YYYYMMDD),
+`qemu_version` (QEMU's `VERSION`; `make-srpm.sh` checks it) and, if the
+protocol header changed, `apv_protocol` (here and in
+`reims-vgpu-backend.spec`; bump both packages together) in the spec, add a
+changelog entry, rebuild. docs/maintainer-guide.md has the steps.
 
 ## Licences
 
-QEMU is GPL version 2 as a whole, with many files GPL-2.0-or-later. Reims
-states LGPL-3.0-or-later in its `LICENSE` and README, and GPL-2.0-or-later in
-its crates' `Cargo.toml`. metal2vulkan is LGPL-3.0-or-later. The vendored
-crates keep their own licence files. See `LICENSING.md`.
+QEMU is GPL version 2 as a whole, with per-file licences that are
+compatible with it (mostly GPL-2.0-or-later). `apv-gpu-proxy.c` is
+GPL-2.0-or-later and its protocol header MIT, both written for this fork.
+Reims and metal2vulkan are not in this package. See `LICENSING.md`.

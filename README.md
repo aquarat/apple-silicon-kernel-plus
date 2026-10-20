@@ -4,8 +4,9 @@ RPM packages for Fedora Asahi Remix on Apple silicon Macs: a kernel from
 the Asahi Linux kernel tree's `asahi-wip` branch (Linux 7.2, with
 Thunderbolt/USB4 host support) and KVM patches for macOS guests, packaged
 like the Fedora Asahi kernel; video decoder and encoder drivers, a patched
-Vulkan driver, and QEMU for macOS guests. COPR builds and hosts the
-packages; GitHub Actions checks them and starts the builds.
+Vulkan driver, and QEMU for macOS guests with its paravirtual GPU as a
+separate program. COPR builds and hosts the packages; GitHub Actions
+checks them and starts the builds.
 
 **Unofficial.** This project is not affiliated with or endorsed by Asahi
 Linux, Fedora or Apple. Do not report bugs from these packages to Asahi
@@ -20,7 +21,8 @@ Linux or Fedora; report them here.
 | `dkms-apple-avd` | The Asahi AVD video decoder driver with four fixes for long-running streams, built by DKMS. [packages/apple-avd](packages/apple-avd) | stable |
 | `apple-ave`, `dkms-apple-ave` | A V4L2 H.264/HEVC encoder driver for the AVE block, reverse engineered, and `apple-ave-fetch-firmware`, which makes its firmware files on your Mac from Apple's own image. No Apple firmware or Apple data included. [packages/apple-ave](packages/apple-ave) | **experimental** ([why](packages/apple-ave/README.md#status)) |
 | `mesa-honeykrisp-plus` | Mesa's Asahi Vulkan driver (Honeykrisp) with two shader compiler fixes, installed beside the system Mesa and used only through `VK_DRIVER_FILES`. Patch 0002 is still being validated. [packages/mesa-honeykrisp-plus](packages/mesa-honeykrisp-plus) | stable (0002: in validation) |
-| `qemu-vmapple` | QEMU with the `vmapple` machine and the Reims paravirtual GPU, installed beside Fedora's qemu. (`qemu-vmapple-kvm-nisv` is retired: an empty package now, see [its README](packages/qemu-vmapple/README.md#qemu-vmapple-kvm-nisv-retired).) [packages/qemu-vmapple](packages/qemu-vmapple) | stable; **build it yourself**, not in the COPR (licence, see [LICENSING.md](LICENSING.md#qemu-vmapple)) |
+| `qemu-vmapple` | QEMU with the `vmapple` machine for macOS guests, installed beside Fedora's qemu. Its paravirtual GPU runs out of process: the `apv-gpu-proxy` device forwards it to `reims-vgpu-backend`; no GPU code in QEMU. (`qemu-vmapple-kvm-nisv` is retired: an empty package now, see [its README](packages/qemu-vmapple/README.md#qemu-vmapple-kvm-nisv-retired).) [packages/qemu-vmapple](packages/qemu-vmapple) | stable (out-of-process GPU: new in this release, in production use) |
+| `reims-vgpu-backend` | Reims, the paravirtual GPU of macOS guests, as its own program: runs the guest's Metal work on the host's Vulkan driver (with `mesa-honeykrisp-plus`), for `qemu-vmapple`. [packages/reims-vgpu-backend](packages/reims-vgpu-backend) | stable (new package; in production use) |
 
 ## Supported hardware
 
@@ -33,6 +35,7 @@ As the sources state; "tested" means on at least one machine of that SoC.
 | apple-ave | t6000, t8103 (H.264 without B frames), t8112; t6001 and t6002 after enabling them (not yet run in this configuration). All with the macOS 13.5 system firmware |
 | mesa-honeykrisp-plus | M1 and M2 GPUs, as Mesa's Asahi driver |
 | qemu-vmapple | hosts that run the kernel above; macOS 13 and 26 guests used on t6001 and t6002 hosts |
+| reims-vgpu-backend | M1 and M2 GPUs, with `mesa-honeykrisp-plus`; the out-of-process GPU used with macOS 26 guests on a t6002 host |
 
 ## Install
 
@@ -42,7 +45,8 @@ yet; this line is a placeholder until it does).
 ```sh
 sudo dnf copr enable aquarat/apple-silicon-kernel-plus
 sudo dnf upgrade                      # moves you to this project's kernel (see below)
-sudo dnf install dkms-apple-avd       # and/or: apple-ave, mesa-honeykrisp-plus, apple-silicon-thunderbolt
+sudo dnf install dkms-apple-avd       # and/or: apple-ave, mesa-honeykrisp-plus, apple-silicon-thunderbolt,
+                                      #   qemu-vmapple (recommends reims-vgpu-backend)
 ```
 
 DKMS packages need `kernel-16k-devel` for each installed kernel.
@@ -112,7 +116,7 @@ kernel's trees before you boot it:
 
 ```sh
 sudo dnf copr disable aquarat/apple-silicon-kernel-plus
-sudo dnf remove dkms-apple-avd apple-ave dkms-apple-ave mesa-honeykrisp-plus 'qemu-vmapple*'   # what you installed
+sudo dnf remove dkms-apple-avd apple-ave dkms-apple-ave mesa-honeykrisp-plus 'qemu-vmapple*' reims-vgpu-backend   # what you installed
 dnf list --installed 'kernel-16k-core'          # is a stock (.asahi.fc44) kernel installed?
 sudo dnf install kernel-16k-7.1.13-402.asahi.fc44   # if not (or another stock version)
 K=7.1.13-402.asahi.fc44.aarch64+16k             # the stock kernel's release, as in /boot/vmlinuz-*
@@ -175,7 +179,8 @@ Short version ([docs/update-policy.md](docs/update-policy.md)):
   kernel series; until then DKMS skips the new series and the in-tree
   driver is used.
 - **mesa-honeykrisp-plus:** follows Fedora's Mesa version, by hand.
-- **qemu-vmapple, apple-ave:** follow their upstream repositories, by hand.
+- **qemu-vmapple, reims-vgpu-backend, apple-ave:** follow their upstream
+  repositories, by hand.
 
 This is a best-effort project. There is no security support: the kernel
 gets upstream fixes when its Asahi commit is moved.
@@ -195,7 +200,8 @@ COPR builds the same SRPMs through `.copr/Makefile`. Maintainer guide:
 
 - Anees Iqbal ([steelbrain](https://github.com/steelbrain)): the original
   macOS-on-Asahi-KVM work, the Linux PAuth VM-key patch that kernel patch
-  0001 is a rebase of, and Reims, the paravirtual GPU in qemu-vmapple.
+  0001 is a rebase of, and Reims, the paravirtual GPU in
+  reims-vgpu-backend.
 - The Asahi Linux contributors and the Fedora Asahi SIG: the kernel tree
   (including Sven Peter's Thunderbolt/USB4 series), the AVD driver, and the
   `@asahi` packages and configuration this project builds on. The Fedora

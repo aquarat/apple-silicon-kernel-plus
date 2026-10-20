@@ -8,6 +8,7 @@
 #   scripts/make-srpm.sh --list
 #
 # Packages: kernel apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus qemu-vmapple
+#           reims-vgpu-backend
 #
 # Environment:
 #   CACHE_DIR      downloads and git checkouts (default: <repo>/.cache)
@@ -21,7 +22,7 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-PACKAGES=(kernel apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus qemu-vmapple)
+PACKAGES=(kernel apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus qemu-vmapple reims-vgpu-backend)
 CACHE_DIR=${CACHE_DIR:-$HERE/.cache}
 
 die() { echo "make-srpm: $*" >&2; exit 1; }
@@ -270,50 +271,101 @@ build_mesa() {
     finish "$spec"
 }
 
-# qemu-vmapple: Reims at the commit in the spec, its vendor/qemu submodule at
-# the commit Reims pins, QEMU's meson subprojects, and the Rust crates
-# (cargo vendor, git dependencies included), so COPR builds offline.
+# A clone of <url> in $CACHE_DIR/git/<name>, checked out at <commit>, clean.
+checkout_at() {
+    local name=$1 url=$2 commit=$3 g="$CACHE_DIR/git/$1"
+    if [ ! -d "$g/.git" ]; then
+        git clone -q --filter=blob:none --no-checkout "$url" "$g"
+    fi
+    git -C "$g" cat-file -e "$commit^{commit}" 2>/dev/null ||
+        git -C "$g" fetch -q origin "$commit" 2>/dev/null || git -C "$g" fetch -q origin
+    git -C "$g" -c advice.detachedHead=false checkout -q -f "$commit"
+    git -C "$g" clean -q -fdx
+    [ "$(git -C "$g" rev-parse HEAD)" = "$commit" ] || die "$name: checkout of $commit failed"
+    echo "$g"
+}
+
+# The extra tarball: the package directory and this repository's licence files.
+extra_tarball() {
+    local name=$1 ver=$2
+    mkdir -p "$top/stage/$name-$ver-extra"
+    cp -a "$HERE/packages/$pkg/." "$top/stage/$name-$ver-extra/"
+    rm -f "$top/stage/$name-$ver-extra/$pkg.spec"
+    cp "$HERE/LICENSE" "$HERE/LICENSING.md" "$top/stage/$name-$ver-extra/"
+    "${TAR[@]}" -C "$top/stage" -cJf "$top/SOURCES/$name-$ver-extra.tar.xz" "$name-$ver-extra"
+}
+
+# APV_PROXY_VERSION in a protocol header against the spec's apv_protocol.
+check_protocol() {
+    local spec=$1 header=$2 want got
+    want=$(sed -n 's/^%global apv_protocol[[:space:]]\+//p' "$spec")
+    got=$(sed -n 's/^#define APV_PROXY_VERSION \([0-9]\+\)u$/\1/p' "$header")
+    [ -n "$got" ] || die "no APV_PROXY_VERSION in $(basename "$header")"
+    [ "$got" = "$want" ] || die "the protocol header says version $got, $pkg.spec apv_protocol says $want"
+}
+
+# qemu-vmapple: aquarat/qemu-reims-vgpu at the commit in the spec, on its
+# own (no Reims), with QEMU's meson subprojects, so COPR builds offline.
 build_qemu() {
-    local spec="$top/SPECS/$pkg.spec" reims qemu_pin short name ver git_dir w
-    for c in git cargo meson curl; do command -v "$c" >/dev/null || die "missing $c"; done
+    local spec="$top/SPECS/$pkg.spec" commit short name ver g w
+    for c in git meson curl; do command -v "$c" >/dev/null || die "missing $c"; done
     cp "$HERE/packages/$pkg/$pkg.spec" "$spec"
-    reims=$(sed -n 's/^%global reims_commit[[:space:]]\+//p' "$spec")
-    qemu_pin=$(sed -n 's/^%global qemu_commit[[:space:]]\+//p' "$spec")
-    [[ $reims =~ ^[0-9a-f]{40}$ ]] || die "reims_commit in $pkg.spec is not a full commit id"
-    short=${reims:0:12}
+    commit=$(sed -n 's/^%global qemu_commit[[:space:]]\+//p' "$spec")
+    [[ $commit =~ ^[0-9a-f]{40}$ ]] || die "qemu_commit in $pkg.spec is not a full commit id"
+    short=${commit:0:12}
     name=$(spec_value "$spec" '%{name}')
     ver=$(spec_value "$spec" '%{version}')
+    g=$(checkout_at qemu-reims-vgpu https://github.com/aquarat/qemu-reims-vgpu.git "$commit")
+    [ "$(cat "$g/VERSION")" = "$(sed -n 's/^%global qemu_version[[:space:]]\+//p' "$spec")" ] ||
+        die "QEMU's VERSION is $(cat "$g/VERSION"); update qemu_version in $pkg.spec"
 
-    git_dir="$CACHE_DIR/git/reims-vgpu"
-    if [ ! -d "$git_dir/.git" ]; then
-        git clone -q --filter=blob:none --no-checkout https://github.com/aquarat/reims-vgpu.git "$git_dir"
+    # The licence split (LICENSING.md): this QEMU must have the proxy device
+    # and none of the in-process Reims device or its cargo build.
+    [ -f "$g/hw/display/apv-gpu-proxy.c" ] || die "QEMU $short has no hw/display/apv-gpu-proxy.c"
+    if compgen -G "$g/hw/display/reims-vgpu*" >/dev/null ||
+       grep -q -i -E 'cargo|reims' "$g/hw/display/meson.build"; then
+        die "QEMU $short still carries the in-process Reims device; LICENSING.md, qemu-vmapple"
     fi
-    git -C "$git_dir" fetch -q origin "$reims" 2>/dev/null || git -C "$git_dir" fetch -q origin
-    git -C "$git_dir" -c advice.detachedHead=false checkout -q -f "$reims"
-    git -C "$git_dir" clean -q -fdx
-    local pinned
-    pinned=$(git -C "$git_dir" ls-tree HEAD vendor/qemu | awk '{print $3}')
-    [ "$pinned" = "$qemu_pin" ] ||
-        die "Reims $short pins vendor/qemu at $pinned, the spec says $qemu_pin (update qemu_commit)"
-    git -C "$git_dir" submodule sync -q vendor/qemu
-    git -C "$git_dir" submodule update -q --init --depth 1 vendor/qemu 2>/dev/null ||
-        git -C "$git_dir" submodule update -q --init vendor/qemu
-    [ "$(git -C "$git_dir/vendor/qemu" rev-parse HEAD)" = "$qemu_pin" ] || die "vendor/qemu checkout failed"
-    git -C "$git_dir/vendor/qemu" clean -q -fdx
+    check_protocol "$spec" "$g/include/hw/display/apv-gpu-proxy-protocol.h"
 
-    # Source0: Reims + QEMU (no .git), with the meson subprojects QEMU needs
-    # for this configuration (Rust in QEMU itself is off; dtc and slirp come
-    # from the system).
+    # Source0: QEMU (no .git), with the meson subprojects this configuration
+    # needs (Rust in QEMU is off; dtc and slirp come from the system).
+    w="$top/stage/qemu-reims-vgpu-$short"
+    mkdir -p "$w"
+    git -C "$g" archive HEAD | tar -x -C "$w"
+    (cd "$w" && meson subprojects download keycodemapdb berkeley-softfloat-3 berkeley-testfloat-3 >/dev/null 2>&1) ||
+        die "meson subprojects download failed"
+    find "$w/subprojects" -mindepth 2 -maxdepth 2 -name .git -exec rm -rf {} +
+    rm -rf "$w/subprojects/packagecache"
+    log "Source0 qemu-reims-vgpu-$short.tar.xz"
+    "${TAR[@]}" -C "$top/stage" -cf - "qemu-reims-vgpu-$short" | xz -T0 -6 > "$top/SOURCES/qemu-reims-vgpu-$short.tar.xz"
+    extra_tarball "$name" "$ver"
+    finish "$spec"
+}
+
+# reims-vgpu-backend: aquarat/reims-vgpu at the commit in the spec (without
+# its vendor/qemu submodule, which only the in-process build uses) and the
+# Rust crates (cargo vendor, git dependencies included), so COPR builds
+# offline. The spec's bundled(crate()) Provides are filled in here.
+build_reims() {
+    local spec="$top/SPECS/$pkg.spec" commit short name ver g w ch
+    for c in git cargo curl; do command -v "$c" >/dev/null || die "missing $c"; done
+    cp "$HERE/packages/$pkg/$pkg.spec" "$spec"
+    commit=$(sed -n 's/^%global reims_commit[[:space:]]\+//p' "$spec")
+    [[ $commit =~ ^[0-9a-f]{40}$ ]] || die "reims_commit in $pkg.spec is not a full commit id"
+    short=${commit:0:12}
+    name=$(spec_value "$spec" '%{name}')
+    ver=$(spec_value "$spec" '%{version}')
+    g=$(checkout_at reims-vgpu https://github.com/aquarat/reims-vgpu.git "$commit")
+    [ -f "$g/crates/reims-vgpu-backend/Cargo.toml" ] || die "Reims $short has no reims-vgpu-backend crate"
+    check_protocol "$spec" "$g/crates/reims-vgpu-proxy-wire/include/apv-gpu-proxy-protocol.h"
+
+    # Source0: Reims (no .git, no vendor/qemu).
     w="$top/stage/reims-vgpu-$short"
     mkdir -p "$w"
-    git -C "$git_dir" archive HEAD | tar -x -C "$w"
+    git -C "$g" archive HEAD | tar -x -C "$w"
     rm -rf "$w/vendor/qemu"
-    mkdir -p "$w/vendor/qemu"
-    git -C "$git_dir/vendor/qemu" archive HEAD | tar -x -C "$w/vendor/qemu"
-    (cd "$w/vendor/qemu" && meson subprojects download keycodemapdb berkeley-softfloat-3 berkeley-testfloat-3 >/dev/null 2>&1) ||
-        die "meson subprojects download failed"
-    find "$w/vendor/qemu/subprojects" -mindepth 2 -maxdepth 2 -name .git -exec rm -rf {} +
-    rm -rf "$w/vendor/qemu/subprojects/packagecache"
+    rmdir "$w/vendor" 2>/dev/null || :
     log "Source0 reims-vgpu-$short.tar.xz"
     "${TAR[@]}" -C "$top/stage" -cf - "reims-vgpu-$short" | xz -T0 -6 > "$top/SOURCES/reims-vgpu-$short.tar.xz"
 
@@ -323,15 +375,46 @@ build_qemu() {
     mkdir -p "$top/stage/cargo-vendor"
     (cd "$w" && CARGO_HOME="$CACHE_DIR/cargo-home" cargo vendor --locked --versioned-dirs \
         "$top/stage/cargo-vendor/vendor" > "$top/stage/cargo-vendor/config.toml" 2>"$top/vendor.log") ||
-        die "cargo vendor failed"
+        { tail -20 "$top/vendor.log" >&2; die "cargo vendor failed"; }
+
+    # The crates linked into the backend, from the vendored sources.
+    ch="$top/cargo-home"
+    mkdir -p "$ch"
+    cp "$top/stage/cargo-vendor/config.toml" "$ch/config.toml"
+    (cd "$w" && CARGO_HOME="$ch" cargo tree --frozen -p reims-vgpu-backend -e no-build,no-dev,no-proc-macro \
+        --prefix none --format '{p}' 2>"$top/tree.log") |
+        sed 's/ (\*)$//' | awk '$1 !~ /^reims-vgpu/ { sub(/^v/, "", $2); print "Provides:       bundled(crate(" $1 ")) = " $2 }' |
+        sort -u > "$top/bundled" || { cat "$top/tree.log" >&2; die "cargo tree failed"; }
+    [ -s "$top/bundled" ] || die "cargo tree listed no crates"
+    # Every linked crate's licence must be in the spec's License tag: each
+    # part of an AND, at least one choice of an OR.
+    (cd "$w" && CARGO_HOME="$ch" cargo tree --frozen -p reims-vgpu-backend -e no-build,no-dev,no-proc-macro \
+        --prefix none --format '{p}|{l}' 2>>"$top/tree.log") | sed 's/ (\*)$//' | sort -u |
+        python3 -I -c '
+import re, sys
+tag = sys.argv[1]
+have = set(re.findall(r"[A-Za-z0-9.+-]+(?: WITH [A-Za-z0-9.+-]+)?", tag)) - {"AND", "OR"}
+bad = []
+for line in sys.stdin:
+    crate, _, lic = line.rstrip("\n").rpartition("|")
+    lic = lic.replace("/", " OR ").strip()
+    if not lic:
+        bad.append(crate + ": no licence"); continue
+    if " OR " in lic and " AND " not in lic:
+        if not any(x.strip("() ") in have for x in lic.split(" OR ")):
+            bad.append(crate + ": " + lic)
+    elif any(x.strip("() ") not in have for x in re.split(r" AND | OR ", lic)):
+        bad.append(crate + ": " + lic)
+if bad:
+    sys.exit("licences not in the License tag:\n  " + "\n  ".join(bad))
+' "$(spec_value "$spec" '%{license}')" || die "update the License tag in $pkg.spec"
+    grep -qx '# @BUNDLED_CRATES@' "$spec" || die "$pkg.spec has no @BUNDLED_CRATES@ line"
+    sed -i -e "/^# @BUNDLED_CRATES@\$/{r $top/bundled" -e 'd}' "$spec"
+    log "$(wc -l < "$top/bundled") bundled crates"
+
     sed -i "s|directory = \".*\"|directory = \"@VENDOR@\"|" "$top/stage/cargo-vendor/config.toml"
     "${TAR[@]}" -C "$top/stage" -cf - cargo-vendor | xz -T0 -6 > "$top/SOURCES/reims-vgpu-$short-vendor.tar.xz"
-
-    mkdir -p "$top/stage/$name-$ver-extra"
-    cp -a "$HERE/packages/$pkg/." "$top/stage/$name-$ver-extra/"
-    rm -f "$top/stage/$name-$ver-extra/$pkg.spec"
-    cp "$HERE/LICENSE" "$HERE/LICENSING.md" "$top/stage/$name-$ver-extra/"
-    "${TAR[@]}" -C "$top/stage" -cJf "$top/SOURCES/$name-$ver-extra.tar.xz" "$name-$ver-extra"
+    extra_tarball "$name" "$ver"
     finish "$spec"
 }
 
@@ -340,4 +423,5 @@ kernel) build_kernel ;;
 apple-avd|apple-ave|apple-silicon-thunderbolt) build_own ;;
 mesa-honeykrisp-plus) build_mesa ;;
 qemu-vmapple) build_qemu ;;
+reims-vgpu-backend) build_reims ;;
 esac

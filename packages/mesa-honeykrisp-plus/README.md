@@ -15,8 +15,10 @@ honeykrisp-plus vulkaninfo --summary     # one command
 honeykrisp-plus                          # prints VK_DRIVER_FILES=...
 ```
 
-For QEMU with the Reims GPU (qemu-vmapple), set the same `VK_DRIVER_FILES`
-in the environment of the QEMU process.
+For the Reims GPU of macOS guests, set the same `VK_DRIVER_FILES` in the
+environment of `reims-vgpu-backend`, the process that runs the GPU
+(`honeykrisp-plus reims-vgpu-backend --socket ...`; see
+[packages/qemu-vmapple](../qemu-vmapple/README.md)).
 
 ## Patches
 
@@ -27,7 +29,7 @@ in the environment of the QEMU process.
 
 Both fix crashes in the shader compiler on 16-bit varyings, which shaders
 translated from Metal use. Without them, the compiler aborts the process
-that builds the pipeline (QEMU and its guest).
+that builds the pipeline (`reims-vgpu-backend`, and with it the guest's GPU).
 
 ## Build
 

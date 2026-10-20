@@ -26,21 +26,23 @@ declare -A SPEC=(
     [apple-ave]=packages/apple-ave/apple-ave.spec
     [apple-silicon-thunderbolt]=packages/apple-silicon-thunderbolt/apple-silicon-thunderbolt.spec
     [mesa-honeykrisp-plus]=packages/mesa-honeykrisp-plus/mesa-honeykrisp-plus.spec
+    [qemu-vmapple]=packages/qemu-vmapple/qemu-vmapple.spec
+    [reims-vgpu-backend]=packages/reims-vgpu-backend/reims-vgpu-backend.spec
 )
-# qemu-vmapple is not built on COPR yet: QEMU (GPL-2.0-only) links Reims and
-# metal2vulkan, whose LICENSE files say LGPL-3.0. Build it locally until Reims
-# runs as a separate process (see LICENSING.md).
+# qemu-vmapple contains no Reims code; Reims is the separate program
+# reims-vgpu-backend (LICENSING.md, qemu-vmapple and reims-vgpu-backend).
 
 # Build timeouts in seconds (COPR's default is 5 hours).
-declare -A TIMEOUT=([kernel]=72000 [qemu-vmapple]=36000 [mesa-honeykrisp-plus]=18000
-                    [apple-avd]=3600 [apple-ave]=3600 [apple-silicon-thunderbolt]=3600)
+declare -A TIMEOUT=([kernel]=72000 [qemu-vmapple]=36000 [reims-vgpu-backend]=36000
+                    [mesa-honeykrisp-plus]=18000 [apple-avd]=3600 [apple-ave]=3600
+                    [apple-silicon-thunderbolt]=3600)
 
 name=${PROJECT#*/}
 if ! copr-cli get "$PROJECT" >/dev/null 2>&1; then
     chroot_args=()
     for c in "${CHROOTS[@]}"; do chroot_args+=(--chroot "$c"); done
     run copr-cli create "$name" "${chroot_args[@]}" \
-        --description "Unofficial packages for Fedora Asahi Remix: an experimental kernel from the Asahi Linux asahi-wip tree (Linux 7.2, Thunderbolt/USB4) with KVM patches for macOS guests, AVD/AVE video drivers (DKMS), a patched Honeykrisp Vulkan driver and QEMU with vmapple and Reims. Not affiliated with or endorsed by Asahi Linux, Fedora or Apple." \
+        --description "Unofficial packages for Fedora Asahi Remix: an experimental kernel from the Asahi Linux asahi-wip tree (Linux 7.2, Thunderbolt/USB4) with KVM patches for macOS guests, AVD/AVE video drivers (DKMS), a patched Honeykrisp Vulkan driver, and QEMU with vmapple plus the Reims paravirtual GPU as a separate process. Not affiliated with or endorsed by Asahi Linux, Fedora or Apple." \
         --instructions "See https://github.com/aquarat/apple-silicon-kernel-plus#install. Enabling this repository replaces the stock @asahi kernel with this project's experimental 7.2 build; read the README's Rollback section first. Do not report bugs from these packages to Asahi Linux or Fedora." \
         --enable-net off --unlisted-on-hp off --appstream off
 fi

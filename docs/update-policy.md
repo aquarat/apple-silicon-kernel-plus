@@ -62,10 +62,13 @@ of response times.
   not change.
 - Patches that upstream Mesa merges are dropped.
 
-## qemu-vmapple
+## qemu-vmapple and reims-vgpu-backend
 
-- Tracks `aquarat/reims-vgpu` `master` (and the QEMU commit it pins), by
-  hand, after the new commit has run macOS guests.
+- qemu-vmapple tracks `aquarat/qemu-reims-vgpu` `master`, and
+  reims-vgpu-backend `aquarat/reims-vgpu` `master`, by hand, after the new
+  commits have run macOS guests together (the out-of-process build the
+  production runners use). A change to the apv-gpu-proxy protocol moves
+  both packages at once.
 
 ## Fedora releases
 
