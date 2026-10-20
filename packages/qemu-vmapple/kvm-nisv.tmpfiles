@@ -1,5 +1,0 @@
-# /usr/lib/tmpfiles.d/qemu-vmapple-kvm-nisv.conf (qemu-vmapple-kvm-nisv)
-# Turn on KVM's emulation of MMIO loads/stores without an instruction
-# syndrome, which macOS guests need. The parameter exists only in the
-# apple-silicon-kernel-plus kernel; "w" does nothing when the file is absent.
-w- /sys/module/kvm/parameters/emulate_nisv_ldst - - - - Y

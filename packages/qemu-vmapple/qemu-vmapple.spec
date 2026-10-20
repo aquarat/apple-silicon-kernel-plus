@@ -20,7 +20,7 @@
 
 Name:           qemu-vmapple
 Version:        %{qemu_version}^%{reims_date}git%(echo %{reims_commit} | cut -c1-7)
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        QEMU for macOS guests (vmapple machine, Reims paravirtual GPU)
 # QEMU: GPL-2.0-only as a whole, many files GPL-2.0-or-later (and other
 # GPL-compatible licences, per file). Reims: LICENSE says LGPL-3.0-or-later,
@@ -78,22 +78,21 @@ QEMU fork github.com/aquarat/qemu-reims-vgpu (the commit Reims pins),
 aarch64-softmmu only. Installed beside Fedora's qemu packages:
 /usr/libexec/qemu-vmapple/qemu-system-aarch64, also run as qemu-vmapple.
 
-macOS guests also need the kernel from this project (KVM patches) with the
-no-syndrome MMIO emulation turned on (qemu-vmapple-kvm-nisv). This package
-contains no macOS software or Apple firmware.
+macOS guests also need the kernel from this project (KVM patches; its
+no-syndrome MMIO emulation is on by default since kernel 7.2.11). This
+package contains no macOS software or Apple firmware.
 
 %package kvm-nisv
-Summary:        Turn on the kernel's no-syndrome MMIO emulation for macOS guests
+Summary:        Retired: the kernel's no-syndrome MMIO emulation is now on by default
 BuildArch:      noarch
-Requires:       systemd
 
 %description kvm-nisv
-Sets the kernel parameter kvm.emulate_nisv_ldst to Y at boot and on install,
-through a tmpfiles.d rule. The parameter exists only in the kernel from
-apple-silicon-kernel-plus, where it is off by default; macOS guests need it
-on (XNU accesses the interrupt controller with instructions KVM otherwise
-cannot emulate). On other kernels the rule does nothing.
-Removing this package turns the emulation off again.
+Empty. This package used to turn on the kernel parameter
+kvm.emulate_nisv_ldst with a tmpfiles.d rule. The kernel from
+apple-silicon-kernel-plus has it on by default since 7.2.11, so the rule is
+gone. The package stays, empty and without scriptlets, so that upgrading
+it does not switch the emulation off on the running kernel (the old
+version's removal script did that). Remove it whenever you like.
 
 %prep
 %setup -q -n reims-vgpu-%{reims_short} -a 1 -a 2
@@ -126,16 +125,6 @@ cp -a stage%{_datadir}/qemu-vmapple %{buildroot}%{_datadir}/
 test -x %{buildroot}%{_libexecdir}/qemu-vmapple/qemu-system-aarch64
 ln -s ../libexec/qemu-vmapple/qemu-system-aarch64 %{buildroot}%{_bindir}/qemu-vmapple
 cd ../..
-install -D -m 0644 %{name}-%{version}-extra/kvm-nisv.tmpfiles \
-    %{buildroot}%{_tmpfilesdir}/qemu-vmapple-kvm-nisv.conf
-
-%post kvm-nisv
-%tmpfiles_create qemu-vmapple-kvm-nisv.conf
-
-%postun kvm-nisv
-if [ "$1" -eq 0 ] && [ -w /sys/module/kvm/parameters/emulate_nisv_ldst ]; then
-    echo N > /sys/module/kvm/parameters/emulate_nisv_ldst || :
-fi
 
 %files
 %license vendor/qemu/COPYING vendor/qemu/LICENSE LICENSE
@@ -147,9 +136,13 @@ fi
 
 %files kvm-nisv
 %license %{name}-%{version}-extra/LICENSE
-%{_tmpfilesdir}/qemu-vmapple-kvm-nisv.conf
 
 %changelog
+* Tue Oct 20 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 11.1.50^20261011git51c70eb-2
+- qemu-vmapple-kvm-nisv is retired: the kernel's no-syndrome MMIO emulation
+  is on by default from kernel 7.2.11. The subpackage is now empty and has
+  no scriptlets, so upgrading it leaves the running kernel's setting alone.
+
 * Sun Oct 11 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 11.1.50^20261011git51c70eb-1
 - reims-vgpu 51c70eb with qemu-reims-vgpu 6740a49: the copy path (guest
   data copied directly between guest RAM and mapped Vulkan memory) and the
