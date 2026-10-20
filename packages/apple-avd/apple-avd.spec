@@ -17,7 +17,8 @@ BuildArch:      noarch
 
 %description
 The Apple Video Decoder (AVD) V4L2 stateless driver from the
-apple-silicon-kernel-plus kernel %{base_kernel} (Asahi Linux kernel tree),
+apple-silicon-kernel-plus kernel
+%{base_kernel} (Asahi Linux kernel tree),
 with four fixes for long-running streams.
 This is the source package; install dkms-apple-avd.
 
@@ -31,9 +32,8 @@ Provides:       apple-avd-kmod = %{version}-%{release}
 
 %description -n dkms-apple-avd
 The Apple Video Decoder (AVD) V4L2 stateless driver (H.264, HEVC, VP9,
-AV1)
-as it ships in the apple-silicon-kernel-plus kernel %{base_kernel},
-plus four fixes:
+AV1) as it ships in the apple-silicon-kernel-plus kernel
+%{base_kernel}, plus four fixes:
 - an H.264 slice that fails early no longer leaves its request
   uncompleted (EBUSY afterwards) or a freed job table in use;
 - slices that reference invalid DPB entries are rejected instead of
