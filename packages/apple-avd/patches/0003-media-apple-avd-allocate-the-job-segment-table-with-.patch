@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Sun, 13 Sep 2026 10:43:04 +0000
-Subject: [PATCH 3/4] media: apple: avd: allocate the job segment table with
+Subject: [PATCH 3/5] media: apple: avd: allocate the job segment table with
  kvcalloc
 
 The job segment table holds one struct avd_segment of 2056 bytes per
@@ -32,10 +32,10 @@ Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
  2 files changed, 6 insertions(+), 6 deletions(-)
 
 diff --git a/avd-drv.c b/avd-drv.c
-index 5f0e4a0..4c7bfb9 100644
+index 5429635..17814f5 100644
 --- a/avd-drv.c
 +++ b/avd-drv.c
-@@ -139,7 +139,7 @@ int avd_init_job(struct avd_ctx *ctx, enum avd_codec codec, size_t segments)
+@@ -144,7 +144,7 @@ int avd_init_job(struct avd_ctx *ctx, enum avd_codec codec, size_t segments)
  
  	job->codec = codec;
  	job->num = 0;
@@ -44,7 +44,7 @@ index 5f0e4a0..4c7bfb9 100644
  	if (!job->segments)
  		ret = -ENOMEM;
  	return ret;
-@@ -187,7 +187,7 @@ int avd_submit_job(struct avd_ctx *ctx)
+@@ -192,7 +192,7 @@ int avd_submit_job(struct avd_ctx *ctx)
  		       reg);
  	}
  

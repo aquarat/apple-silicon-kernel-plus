@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Sun, 13 Sep 2026 12:41:20 +0000
-Subject: [PATCH 2/4] media: apple: avd: h264: reject slices that reference
+Subject: [PATCH 2/5] media: apple: avd: h264: reject slices that reference
  invalid DPB entries
 
 stream_refs() pushes a reference header and its RVRA addresses only for

@@ -15,6 +15,7 @@
 #include <linux/iommu.h>
 #include <linux/reset.h>
 #include <linux/delay.h>
+#include <linux/unaligned.h>
 
 #include <media/videobuf2-dma-contig.h>
 #include <media/videobuf2-v4l2.h>
@@ -23,7 +24,11 @@
 #include "avd-inst.h"
 #include "avd-regs.h"
 
-#define AVD_CODEC_INFO_MAX_SIZE	0x40
+#define AVD_CONFIG_OFFSET	0x400
+#define AVD_CONFIG_SIZE		0x100
+#define AVD_CONFIG_CODEC_OFFSET	0x4
+#define AVD_CONFIG_MAGIC	((u32)'A' | ((u32)'V' << 8) | \
+				 ((u32)'D' << 16) | ((u32)'c' << 24))
 
 static void calc_tile_meta(u32 w, u32 h, u32 bpb, u32 tile_dim,
 			   u32 meta_hdr_bytes, u32 *tile, u32 *meta)
@@ -685,7 +690,6 @@ static int avd_probe(struct platform_device *pdev)
 {
 	struct avd_dev *avd;
 	const struct of_device_id *match;
-	const char *codec_info = NULL;
 	int ret, irq;
 
 	avd = devm_kzalloc(&pdev->dev, sizeof(*avd), GFP_KERNEL);
@@ -729,26 +733,22 @@ static int avd_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	/* Determine firmware and HW variant capabilities */
-	codec_info = avd->fw->data + avd->fw->size - AVD_CODEC_INFO_MAX_SIZE;
-	if (strncmp(codec_info, "CODECS:", 7) == 0) {
-		unsigned int caps = 0;
-		unsigned int variant_caps = avd->variant->capabilities;
+	if (avd->fw->size < (AVD_CONFIG_OFFSET + AVD_CONFIG_SIZE)) {
+		dev_err(avd->dev, "Firmware %s is too small, size: %zu bytes\n",
+			avd->variant->fw_name, avd->fw->size);
+		iommu_domain_free(avd->empty_domain);
+		return -EINVAL;
+	}
 
-		if (strnstr(codec_info, "av1", AVD_CODEC_INFO_MAX_SIZE))
-			caps |= variant_caps & AVD_CAPABILITY_AV1;
-		if (strnstr(codec_info, "h264", AVD_CODEC_INFO_MAX_SIZE))
-			caps |= variant_caps & AVD_CAPABILITY_H264;
-		if (strnstr(codec_info, "h265", AVD_CODEC_INFO_MAX_SIZE))
-			caps |= variant_caps & AVD_CAPABILITY_HEVC;
-		if (strnstr(codec_info, "vp9", AVD_CODEC_INFO_MAX_SIZE))
-			caps |= variant_caps & AVD_CAPABILITY_VP9;
-
-		dev_info(avd->dev, "Firmware codecs: %.27s\n", codec_info + 7);
-
-		avd->capabilities = caps;
+	if (get_unaligned_le32(avd->fw->data + AVD_CONFIG_OFFSET) == AVD_CONFIG_MAGIC) {
+		u32 codec_offset = AVD_CONFIG_OFFSET + AVD_CONFIG_CODEC_OFFSET;
+		u32 fw_caps = get_unaligned_le32(avd->fw->data + codec_offset);
+		avd->capabilities = fw_caps & avd->variant->capabilities;
 	} else {
-		/* Backward compatibility to old firmware, do not upstream. */
+		/* avd-fw from before the config block: as Asahi's driver did until
+		 * 7.2.15, trust the SoC's list.
+		 */
+		dev_warn(avd->dev, "Firmware without config block, assuming the SoC's codecs\n");
 		avd->capabilities = avd->variant->capabilities;
 	}
 

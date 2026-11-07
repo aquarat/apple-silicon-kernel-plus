@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: aquarat <3090997+aquarat@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 09:30:00 +0000
+Subject: [PATCH 5/5] media: apple: avd: keep working with firmware without a
+ config block
+
+Asahi's "media: apple: avd: Announce only codecs the firmware supports"
+(7.2.15) reads the codec list from a config block in the firmware and
+fails the probe when there is none. Firmware built from avd-fw before
+that block existed, which is what a machine that took it from the
+pre-0.2 sources has, then leaves the machine with no decoder at all.
+Nothing else in this driver's interface to the firmware changed.
+
+Fall back to the SoC's list with a warning, as the driver did before
+for firmware without the older CODECS: tail.
+
+Tested: build only (7.2.15). Not run on hardware yet.
+---
+ avd-drv.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/avd-drv.c b/avd-drv.c
+index 17814f5..e560bee 100644
+--- a/avd-drv.c
++++ b/avd-drv.c
+@@ -745,8 +745,11 @@ static int avd_probe(struct platform_device *pdev)
+ 		u32 fw_caps = get_unaligned_le32(avd->fw->data + codec_offset);
+ 		avd->capabilities = fw_caps & avd->variant->capabilities;
+ 	} else {
+-		dev_err(avd->dev, "Too old or incompatible firmware without config\n");
+-		return -EINVAL;
++		/* avd-fw from before the config block: as Asahi's driver did until
++		 * 7.2.15, trust the SoC's list.
++		 */
++		dev_warn(avd->dev, "Firmware without config block, assuming the SoC's codecs\n");
++		avd->capabilities = avd->variant->capabilities;
+ 	}
+ 
+ 	ret = dma_set_mask_and_coherent(avd->dev,

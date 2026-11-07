@@ -2,10 +2,10 @@
 # apple-avd: the Asahi kernel tree's Apple AVD decoder driver with fixes,
 # as DKMS source. src/ is scripts/rebase-avd.sh output: the in-tree driver of
 # the kernel named below plus patches/. See README.md.
-%global base_kernel 7.2.11-900.asahiwip.plus1.fc44
+%global base_kernel 7.2.15-900.asahiwip.plus1.fc44
 
 Name:           apple-avd
-Version:        7.2.11.1
+Version:        7.2.15.1
 Release:        1%{?dist}
 Summary:        Apple AVD video decoder driver with stream fixes (DKMS source)
 # avd-hw.c, avd-inst.h, avd-regs.h: MIT. avd-av1-entropymode.c: BSD-2-Clause
@@ -19,7 +19,7 @@ BuildArch:      noarch
 The Apple Video Decoder (AVD) V4L2 stateless driver from the
 apple-silicon-kernel-plus kernel
 %{base_kernel} (Asahi Linux kernel tree),
-with four fixes for long-running streams.
+with four fixes for long-running streams and a fallback for older firmware.
 This is the source package; install dkms-apple-avd.
 
 %package -n dkms-apple-avd
@@ -81,6 +81,12 @@ dkms remove -m apple-avd -v %{version} --all --rpm_safe_upgrade >/dev/null 2>&1 
 %{_prefix}/lib/depmod.d/apple-avd.conf
 
 %changelog
+* Sat Nov 07 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 7.2.15.1-1
+- Rebased onto the kernel-7.2.15-900.asahiwip.plus1.fc44 driver (Asahi
+  asahi-7.2.15-2). Patches 0001-0004 apply unchanged.
+- 0005: keep working with firmware that has no config block; 7.2.15's
+  driver fails the probe on avd-fw from before that block.
+
 * Tue Oct 20 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 7.2.11.1-1
 - Rebased onto the kernel-7.2.11-900.asahiwip.plus1.fc44 driver (Asahi
   asahi-wip e09c62843a8e). 7.2 sizes the H.264 slice table dynamically and
