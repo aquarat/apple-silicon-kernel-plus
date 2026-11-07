@@ -6,7 +6,8 @@ of response times.
 ## kernel
 
 - The kernel is the Asahi Linux kernel tree at one commit of its
-  `asahi-wip` branch, pinned in `packages/kernel/kernel-plus.conf`
+  `asahi-wip` branch, or of `asahi` when `asahi-wip` has moved past the
+  series in use (7.2.15), pinned in `packages/kernel/kernel-plus.conf`
   together with the Linux release it is based on and the Fedora kernel
   SRPM of that release. It is **experimental**: `asahi-wip` is Asahi's
   integration branch, not a release.

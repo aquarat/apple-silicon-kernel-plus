@@ -1,12 +1,12 @@
 # packages/kernel
 
-**Experimental.** The kernel is built from the Asahi Linux kernel tree's
-`asahi-wip` branch (Linux 7.2.11), not from a kernel `@asahi` has
-released. `asahi-wip` is Asahi's integration branch: it carries work that
-is not in any Fedora Asahi Remix kernel yet, among it the Thunderbolt/USB4
-series for Apple silicon. The commit pinned here is the one this project
-soak-tested Thunderbolt on, but it has not had the testing a `@asahi`
-release gets. If you want the stock kernel's stability, do not use this
+**Experimental.** The kernel is built from the Asahi Linux kernel tree at
+tag `asahi-7.2.15-2` (branch `asahi`, Linux 7.2.15), newer than any kernel
+`@asahi` has released when it was pinned. Up to 7.2.11 the pin came from
+`asahi-wip`, Asahi's integration branch; `asahi-wip` has since moved to 7.3
+and `asahi-wip-7.2` stopped at 7.2.2, while `asahi` now carries the same
+Thunderbolt/USB4 series. The commit pinned here has not had the testing a
+`@asahi` release gets. If you want the stock kernel's stability, do not use this
 COPR's kernel (README.md, Rollback).
 
 The packages are still Fedora's `kernel-16k-*`, built by Fedora's
@@ -21,8 +21,8 @@ grub entries).
 
 | | what | pinned by |
 |---|---|---|
-| Source0 `linux-7.2.11.tar.xz` | the kernel.org tarball | `LINUX_TARBALL_URL`, `LINUX_TARBALL_SHA256` |
-| `kernel.spec`, scripts, other sources | Fedora's `kernel-7.2.11-200.fc44` SRPM from Koji | `FEDORA_SRPM_URL`, `FEDORA_SRPM_SHA256` |
+| Source0 `linux-7.2.15.tar.xz` | the kernel.org tarball | `LINUX_TARBALL_URL`, `LINUX_TARBALL_SHA256` |
+| `kernel.spec`, scripts, other sources | Fedora's `kernel-7.2.15-200.fc44` SRPM from Koji | `FEDORA_SRPM_URL`, `FEDORA_SRPM_SHA256` |
 | `patch-7.2-redhat.patch` | generated: the [AsahiLinux/linux](https://github.com/AsahiLinux/linux) tree at `ASAHI_COMMIT` plus Fedora's own `patch-7.2-redhat.patch`, as one diff against the tarball | `ASAHI_COMMIT` (a full commit id: the content) |
 | `linux-kernel-test.patch` | `patches/*.patch`, in file name order | this directory |
 | `kernel-*-fedora.config` | Fedora's configs with `configs/asahi-*.config` and `configs/plus-*.config` applied | this directory |
@@ -30,7 +30,7 @@ grub entries).
 This is the layout of `@asahi`'s own SRPMs: their `patch-<major>-redhat.patch`
 is the Asahi tree plus Fedora's patch, and their `kernel.spec` is
 Fedora's with a few settings changed. `make-srpm.sh` makes the same
-changes to Fedora's 7.2.11 spec:
+changes to Fedora's 7.2.15 spec:
 
 - `%define _with_arm64_16k 1`: the 16k variant, which Fedora does not build;
 - `%define pkgrelease`/`specrelease`: this project's release
@@ -66,11 +66,13 @@ commit (docs/maintainer-guide.md).
 |---|---|---|
 | 0001 | KVM: save, restore and expose Apple's PAuth virtualization state (VM key, APSTS, APCTL, KERNKEYLO/HI). Needed by macOS guests on QEMU's `vmapple` machine. Only acts on Apple CPUs with ACTLR virtualization (M1, M2), and only for guests | always on |
 | 0002 | KVM: decode and emulate MMIO loads/stores that fault without an instruction syndrome (XNU's pre-indexed store to the GIC) | **on**; `kvm.emulate_nisv_ldst=0` turns it off |
-| 0003 | atlantic: keep the station MAC unicast filter enabled on AQC113 (ATL2). 7.2's ATL2 filter rework drops unicast frames to the interface's own address when the firmware's filter base index is above the multicast list length (the Mac Studio's built-in 10GbE: unicast RX dead unless promiscuous) | fix |
+| 0003 | atlantic: enable the AQC113 (ATL2) unicast/multicast list filters relative to the firmware's filter base index. Asahi's own fix keeps the station MAC filter on (unicast RX on the Mac Studio's built-in 10GbE), but still switches list entries off unless the list is longer than the base index, so multicast is lost unless the port is promiscuous | fix |
 
 0001 is a rebase of work by Anees Iqbal (see `CREDITS.md`). 0002 and 0003
-are this project's own work. All three are in `git format-patch` form
-against the tarball plus `patch-7.2-redhat.patch`; docs/maintainer-guide.md
+are this project's own work. Up to 7.2.11, 0003 was a larger patch that
+also kept the station MAC filter on; Asahi's tree does that itself now. All
+three are in `git format-patch` form against the tarball plus
+`patch-7.2-redhat.patch`; docs/maintainer-guide.md
 shows how to rebase them.
 
 0002 was off by default up to the 7.1.13 kernels and is on from 7.2.11:
@@ -169,7 +171,7 @@ own.
 
 How new 7.2 symbols get their values, deterministically:
 
-1. Symbols that are new in Linux 7.2 itself: Fedora's 7.2.11 configs
+1. Symbols that are new in Linux 7.2 itself: Fedora's 7.2 configs
    already set every one of them (Fedora's own config process requires
    it). Those values are used.
 2. Symbols that only the Asahi tree has: `@asahi`'s 7.1.13 choices

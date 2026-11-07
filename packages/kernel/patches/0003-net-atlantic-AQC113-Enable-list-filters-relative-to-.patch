@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: aquarat <3090997+aquarat@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 09:00:00 +0000
+Subject: [PATCH 3/3] net: atlantic: AQC113: Enable list filters relative to
+ the base index
+
+Since the AQC113 (ATL2) filter rework in 7.2 the station MAC address is
+programmed at the firmware-reported l2_filters_base_index and the
+unicast/multicast list follows it at base + 1 .. base + count.
+Asahi's "net: atlantic: AQC113: Fix hw_packet_filter_set for l2 filter
+base index > 0" passes base + 1 as the loop start of
+hw_atl_b0_hw_packet_filter_set_int(), so the station MAC filter is no
+longer switched off, but the loop still enables filter i only when
+i <= mc_list_count, an absolute index. aq_nic_set_multicast_list()
+programs the list first and sets the packet filter last, so with a
+non-zero base every list entry is switched off again unless the list is
+longer than the base index. On a Mac Studio's built-in AQC113 (base 9)
+that leaves unicast filters working but drops multicast and secondary
+unicast addresses unless the port is promiscuous or in all-multicast.
+
+Compare against the list position instead. With the B0 base of 1 the
+condition is the same as before.
+
+This replaces the earlier patch 0003, which reimplemented
+hw_atl2_hw_packet_filter_set(); the part that upstream now does is gone
+and the slots enabled are the same as with that patch.
+
+Tested: build only (7.2.15, Asahi 6ba0637d1ed9). The same slots were
+enabled by the previous patch on 7.2.11, M1 Max Mac Studio, built-in 10GbE.
+Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
+---
+ drivers/net/ethernet/aquantia/atlantic/hw_atl/hw_atl_b0.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/ethernet/aquantia/atlantic/hw_atl/hw_atl_b0.c b/drivers/net/ethernet/aquantia/atlantic/hw_atl/hw_atl_b0.c
+index 5c67edf80..a96c5f8e3 100644
+--- a/drivers/net/ethernet/aquantia/atlantic/hw_atl/hw_atl_b0.c
++++ b/drivers/net/ethernet/aquantia/atlantic/hw_atl/hw_atl_b0.c
+@@ -1069,7 +1069,7 @@ int hw_atl_b0_hw_packet_filter_set_int(struct aq_hw_s *self,
+ 	for (i = base_location; i < HW_ATL_B0_MAC_MAX; ++i)
+ 		hw_atl_rpfl2_uc_flr_en_set(self,
+ 					   (cfg->is_mc_list_enabled &&
+-					    (i <= cfg->mc_list_count)) ?
++					    (i - base_location < cfg->mc_list_count)) ?
+ 					   1U : 0U, i);
+ 
+ 	return aq_hw_err_from_flags(self);
