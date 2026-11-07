@@ -22,7 +22,7 @@ Measurements and details are in each patch's message.
 |---|---|
 | `src/` | the driver source DKMS builds: `scripts/rebase-avd.sh` output for the kernel in the spec's `base_kernel` |
 | `patches/` | the fixes, in `git format-patch` form against the pristine driver plus our out-of-tree `Makefile`/`Kbuild` |
-| `dkms.conf` | `BUILD_EXCLUSIVE_KERNEL="^7\.2\..*asahi.*"`: one kernel series |
+| `dkms.conf` | `BUILD_EXCLUSIVE_KERNEL="^7\.[23]\..*asahi.*"`: the 7.2 and 7.3 drivers are the same source |
 | `depmod-apple-avd.conf` | makes modprobe prefer the DKMS module (in `extra/`) to the in-tree one |
 
 ## Checks after installing

@@ -16,7 +16,7 @@ Linux or Fedora; report them here.
 
 | package | what | status |
 |---|---|---|
-| `kernel` (`kernel-16k-*`) | Fedora's `kernel-16k` packages built from the Asahi Linux kernel tree (tag `asahi-7.2.15-2`, Linux 7.2.15) with `@asahi`'s configuration, the Thunderbolt/USB4 host driver and the tunnelled-PCIe driver (`pcie-apple-apciec`, NVMe in Thunderbolt enclosures on M1 Pro/Max/Ultra) as modules, an AQC113 10GbE fix, and two KVM patches for macOS guests: Apple PAuth VM-key context and emulation of MMIO loads/stores without a syndrome (both on). [packages/kernel](packages/kernel) | **experimental** ([why](packages/kernel/README.md)) |
+| `kernel` (`kernel-16k-*`) | Fedora's `kernel-16k` packages built from the Asahi Linux kernel tree (`asahi-wip`, Linux 7.3.1) with `@asahi`'s configuration, the Thunderbolt/USB4 host driver and the tunnelled-PCIe driver (`pcie-apple-apciec`, NVMe in Thunderbolt enclosures on M1 Pro/Max/Ultra) as modules, an AQC113 10GbE fix, and two KVM patches for macOS guests: Apple PAuth VM-key context and emulation of MMIO loads/stores without a syndrome (both on). [packages/kernel](packages/kernel) | **experimental** ([why](packages/kernel/README.md)) |
 | `apple-silicon-thunderbolt` | udev rules: NVMe power-state transitions (APST) off for drives in Thunderbolt enclosures only (they drop the USB4 link otherwise), and threaded NAPI with GRO off for Thunderbolt networking (thunderbolt-net). [packages/apple-silicon-thunderbolt](packages/apple-silicon-thunderbolt) | experimental |
 | `dkms-apple-avd` | The Asahi AVD video decoder driver with four fixes for long-running streams, built by DKMS. [packages/apple-avd](packages/apple-avd) | stable |
 | `apple-ave`, `dkms-apple-ave` | A V4L2 H.264/HEVC encoder driver for the AVE block, reverse engineered, and `apple-ave-fetch-firmware`, which makes its firmware files on your Mac from Apple's own image. No Apple firmware or Apple data included. [packages/apple-ave](packages/apple-ave) | **experimental** ([why](packages/apple-ave/README.md#status)) |
@@ -69,7 +69,8 @@ The kernel is `<Linux version>-<N>.asahiwip.plus<M>.fc44`:
 | this project, 7.2.11 before Thunderbolt networking | `7.2.11-900.asahiwip.plus1.fc44` | `7.2.11-900.asahiwip.plus1.fc44.aarch64+16k` |
 | this project, 7.2.11 with Thunderbolt networking | `7.2.11-900.asahiwip.plus2.fc44` | `7.2.11-900.asahiwip.plus2.fc44.aarch64+16k` |
 | this project, 7.2.11 with forwardable TSO | `7.2.11-900.asahiwip.plus3.fc44` | `7.2.11-900.asahiwip.plus3.fc44.aarch64+16k` |
-| this project now | `7.2.15-900.asahiwip.plus1.fc44` | `7.2.15-900.asahiwip.plus1.fc44.aarch64+16k` |
+| this project, 7.2.15 | `7.2.15-900.asahiwip.plus1.fc44` | `7.2.15-900.asahiwip.plus1.fc44.aarch64+16k` |
+| this project now | `7.3.1-900.asahiwip.plus1.fc44` | `7.3.1-900.asahiwip.plus1.fc44.aarch64+16k` |
 
 - The version is the Linux release the pinned Asahi commit is based on
   (`KERNEL_VERSION` in `packages/kernel/kernel-plus.conf`).
