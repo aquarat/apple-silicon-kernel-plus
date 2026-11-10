@@ -64,12 +64,13 @@ commit (docs/maintainer-guide.md).
 
 | patch | what | default |
 |---|---|---|
-| 0001 | KVM: save, restore and expose Apple's PAuth virtualization state (VM key, APSTS, APCTL, KERNKEYLO/HI). Needed by macOS guests on QEMU's `vmapple` machine. Only acts on Apple CPUs with ACTLR virtualization (M1, M2), and only for guests | always on |
+| 0001 | KVM: handle Apple's PAuth virtualization state (a random VM key per VM, APSTS, and per-vCPU APCTL, KERNKEYLO/HI exposed to user space). Needed by macOS guests on QEMU's `vmapple` machine. Only acts on M1 and M2 CPUs, under VHE on bare metal | always on |
 | 0002 | KVM: decode and emulate MMIO loads/stores that fault without an instruction syndrome (XNU's pre-indexed store to the GIC) | **on**; `kvm.emulate_nisv_ldst=0` turns it off |
 | 0003 | atlantic: keep the station MAC unicast filter enabled on AQC113 (ATL2). 7.2's ATL2 filter rework drops unicast frames to the interface's own address when the firmware's filter base index is above the multicast list length (the Mac Studio's built-in 10GbE: unicast RX dead unless promiscuous) | fix |
 
-0001 is a rebase of work by Anees Iqbal (see `CREDITS.md`). 0002 and 0003
-are this project's own work. All three are in `git format-patch` form
+0001, 0002 and 0003 are this project's own work. 0001 is an independent
+implementation of what Anees Iqbal first showed macOS guests need (see
+`CREDITS.md` and `docs/kvm-pauth-provenance.md`). All three are in `git format-patch` form
 against the tarball plus `patch-7.2-redhat.patch`; docs/maintainer-guide.md
 shows how to rebase them.
 

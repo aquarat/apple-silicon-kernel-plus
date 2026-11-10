@@ -24,19 +24,19 @@ Our scripts carry `SPDX-License-Identifier: GPL-2.0-only` headers.
 `packages/kernel/patches/*.patch` modify Linux and are distributed under
 Linux's licence, `GPL-2.0-only`.
 
-`0001-KVM-arm64-Apple-PAuth-virtualization-state.patch` is a rebase of a
-Linux 6.19 patch by Anees Iqbal, published in
-[steelbrain/experiment-macOS-arm64-on-asahi-linux-arm64](https://github.com/steelbrain/experiment-macOS-arm64-on-asahi-linux-arm64)
-(commit `657bb24`, `patches/linux-6.19-vmapple-pac-vmkey.patch`). That
-repository has no licence file. A change to Linux can only be distributed
-under `GPL-2.0-only`, which is the licence it is offered under here. The
-patch names him as its author (`From:`) and names its origin; it carries
-no sign-off, as he has not given one. If he
-objects to its distribution, the patch will be withdrawn.
-
+`0001-KVM-arm64-Handle-Apple-PAuth-virtualization-state-under-VHE.patch`,
 `0002-KVM-arm64-emulate-MMIO-ldst-without-ISV.patch` and
 `0003-net-atlantic-atl2-keep-station-MAC-uc-filter-enabled.patch` are this
 project's work.
+
+Until `plus3`, 0001 was a rebase of a patch by Anees Iqbal from
+[steelbrain/experiment-macOS-arm64-on-asahi-linux-arm64](https://github.com/steelbrain/experiment-macOS-arm64-on-asahi-linux-arm64),
+a repository without a licence. From `plus4` it is replaced by an
+independent implementation, written from m1n1's register definitions
+(`GPL-2.0-or-later`) and a functional specification by an implementer
+without access to that patch. How it was written, the sources it used and
+the two incidents in that process are in
+[docs/kvm-pauth-provenance.md](docs/kvm-pauth-provenance.md).
 
 ## apple-avd
 

@@ -73,8 +73,9 @@ that `asahi-wip` (or kernel.org, or `@asahi`) moved. To move:
    ```
 
    (Remove the old patch files first; keep their names.) Keep the headers:
-   `From: Anees Iqbal`, `Origin:` and the rebase note on 0001 (no
-   sign-off unless he gives one), `Signed-off-by:` on 0002 and 0003. Check
+   `Signed-off-by:` on 0001, 0002 and 0003, and 0001's credit paragraph.
+   0001 is a clean-room implementation (docs/kvm-pauth-provenance.md):
+   rebase it from its own history, never from the pre-`plus4` patch. Check
    that `emulate_nisv_ldst` still defaults to on. If upstream fixed the
    atlantic problem (0003), drop the patch.
 5. `PREP_CHECK=1 scripts/build-srpms.sh kernel` (or `scripts/make-srpm.sh`
