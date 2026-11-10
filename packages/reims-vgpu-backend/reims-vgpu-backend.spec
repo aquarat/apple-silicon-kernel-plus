@@ -13,7 +13,7 @@
 # The SRPM carries every source (scripts/make-srpm.sh): Reims, and the Rust
 # crates from `cargo vendor` (the metal2vulkan git dependency included). The
 # build needs no network.
-%global reims_commit 41b625521954b96e8b36b30f0a0b50ed19753d8a
+%global reims_commit 3db7ff2600a75b3806dcce3d7080ba6b3a9cc23d
 %global reims_date   20261110
 %global reims_short  %(c=%{reims_commit}; echo ${c:0:12})
 %global crate_version 0.1.0
@@ -131,6 +131,11 @@ grep -q -- '--socket' usage.txt
 %{_libexecdir}/qemu-vmapple/reims-vgpu-backend
 
 %changelog
+* Tue Nov 10 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 0.1.0^20261110git3db7ff2-1
+- reims-vgpu 3db7ff2: blits into and out of a texture laid over a buffer
+  (newTextureWithDescriptor:offset:bytesPerRow:) work at any row pitch;
+  they were refused (view_desc_decode) and left the destination unwritten.
+
 * Tue Nov 10 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 0.1.0^20261110git41b6255-1
 - reims-vgpu 41b6255: the linear-texture alignment (device-info keys 13
   and 40) is Apple's 16 bytes, not 256, so the guest's Metal validation no
