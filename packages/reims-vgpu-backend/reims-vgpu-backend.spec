@@ -13,8 +13,8 @@
 # The SRPM carries every source (scripts/make-srpm.sh): Reims, and the Rust
 # crates from `cargo vendor` (the metal2vulkan git dependency included). The
 # build needs no network.
-%global reims_commit 2677a20ca8a34ccbe33b7a579ce493723fbc824e
-%global reims_date   20261019
+%global reims_commit 41b625521954b96e8b36b30f0a0b50ed19753d8a
+%global reims_date   20261110
 %global reims_short  %(c=%{reims_commit}; echo ${c:0:12})
 %global crate_version 0.1.0
 # apv-gpu-proxy protocol version (APV_PROXY_VERSION in the protocol header;
@@ -131,6 +131,13 @@ grep -q -- '--socket' usage.txt
 %{_libexecdir}/qemu-vmapple/reims-vgpu-backend
 
 %changelog
+* Tue Nov 10 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 0.1.0^20261110git41b6255-1
+- reims-vgpu 41b6255: the linear-texture alignment (device-info keys 13
+  and 40) is Apple's 16 bytes, not 256, so the guest's Metal validation no
+  longer aborts clients (iconservicesagent's icon renders) whose
+  buffer-backed texture rows are 16-aligned. Found by Izzy Mansurov
+  (sapoepsilon), aquarat/apple-macos-arm64-vm-guest#1.
+
 * Tue Oct 20 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 0.1.0^20261019git2677a20-1
 - First release: reims-vgpu 2677a20 (40c5bc1 with a README change), the
   out-of-process device for qemu-vmapple's apv-gpu-proxy (protocol 1), with

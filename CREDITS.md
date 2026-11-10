@@ -57,6 +57,10 @@ The Mesa developers, in particular the authors of the Asahi Vulkan driver
   [aquarat/qemu-reims-vgpu](https://github.com/aquarat/qemu-reims-vgpu) and
   [aquarat/metal2vulkan](https://github.com/aquarat/metal2vulkan), which add
   what an Asahi Linux host needs.
+- Izzy Mansurov (sapoepsilon, [omvm](https://github.com/sapoepsilon/omvm))
+  found that Reims' 256-byte linear-texture alignment crashes the guest's
+  icon service
+  ([aquarat/apple-macos-arm64-vm-guest#1](https://github.com/aquarat/apple-macos-arm64-vm-guest/issues/1)).
 - The authors of the Rust crates vendored into the reims-vgpu-backend
   SRPM; each crate's licence file names them.
 
