@@ -31,7 +31,10 @@ project's work.
 
 Until `plus3`, 0001 was a rebase of a patch by Anees Iqbal from
 [steelbrain/experiment-macOS-arm64-on-asahi-linux-arm64](https://github.com/steelbrain/experiment-macOS-arm64-on-asahi-linux-arm64),
-a repository without a licence. From `plus4` it is replaced by an
+a repository that then had no licence. (On 2026-11-11 he released its
+patches into the public domain, in
+[a comment on its issue 1](https://github.com/steelbrain/experiment-macOS-arm64-on-asahi-linux-arm64/issues/1#issuecomment-6789795685).)
+From `plus4` it is replaced by an
 independent implementation, written from m1n1's register definitions
 (`GPL-2.0-or-later`) and a functional specification by an implementer
 without access to that patch. How it was written, the sources it used and

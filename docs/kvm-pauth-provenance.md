@@ -15,6 +15,12 @@ Iqbal (steelbrain), from
 on 2026-10-23. No answer had come by 2026-11-10. Downstream projects (for
 example omvm, for Omarchy) could not package a kernel with it.
 
+**2026-11-11.** He released the patches in that repository into the public
+domain
+([comment](https://github.com/steelbrain/experiment-macOS-arm64-on-asahi-linux-arm64/issues/1#issuecomment-6789795685))
+and announced that he would archive the repository. This project keeps the
+independent implementation described here; nothing of his patch returns.
+
 **From `plus4`.** 0001 is an independent implementation. Two things made
 that practical:
 - Most of what such a patch contains is set by the hardware and by KVM's
@@ -117,8 +123,20 @@ QEMU unchanged:
   round-trip values across thousands of load/put cycles of two VMs on one
   CPU.
 
+**Negative control (2026-11-11).** The same tree and configuration built
+without 0001 (`7.2.11-900.asahiwip.nopac1`; none of the new symbols in
+`System.map` or `/proc/kallsyms`), on the same machine:
+- **macOS 26.4 and macOS 13.6 guests:** both fail as expected. iBootStage2
+  completes; at XNU's first PAuth hypercall (`0xc1000000`) QEMU's
+  `KVM_SET_ONE_REG` for `APCTL_EL12` returns `ENOENT`, and QEMU stops the
+  VM with `vmapple: platform hypercall 0xc1000000 failed: No such file or
+  directory`.
+- **The KVM interface:** none of the three Apple register IDs is listed;
+  reading or writing them returns `ENOENT`; two VMs produce the same
+  signatures, where the patched kernel gives them different ones.
+- **The host's own pointer authentication:** passed.
+
 **Not tested:**
-- a negative control (the same kernel without the patch);
 - the nVHE paths (`kvm-arm.mode=nvhe` is rejected on M1 Max);
 - M2 hardware.
 
