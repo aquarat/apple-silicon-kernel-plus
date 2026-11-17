@@ -16,6 +16,7 @@ on:
           - apple-ave
           - apple-silicon-thunderbolt
           - mesa-honeykrisp-plus
+          - mesa-coopmat
           - qemu-vmapple
           - reims-vgpu-backend
           - all
@@ -44,12 +45,12 @@ jobs:
           PACKAGE: ${{ inputs.package }}
         run: |
           if [ "$PACKAGE" = all ]; then
-            set -- apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus qemu-vmapple reims-vgpu-backend kernel
+            set -- apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus mesa-coopmat qemu-vmapple reims-vgpu-backend kernel
           else
             set -- "$PACKAGE"
           fi
           for p in "$@"; do
-            case $p in kernel) t=72000 ;; qemu-vmapple|reims-vgpu-backend) t=36000 ;; mesa-honeykrisp-plus) t=18000 ;; *) t=3600 ;; esac
+            case $p in kernel) t=72000 ;; qemu-vmapple|reims-vgpu-backend) t=36000 ;; mesa-honeykrisp-plus|mesa-coopmat) t=18000 ;; *) t=3600 ;; esac
             echo "== $p"
             copr-cli build-package aquarat/apple-silicon-kernel-plus --name "$p" --nowait --timeout "$t"
           done
