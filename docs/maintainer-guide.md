@@ -210,6 +210,15 @@ When Fedora updates `mesa-vulkan-drivers` for the target release:
 3. Rebuild; patches that no longer apply need a rebase (upstream may have
    merged them: drop those).
 
+## Bumping mesa-coopmat
+
+It follows the `coopmat` branch of github.com/aquarat/mesa, by hand; the
+steps are in packages/mesa-coopmat/README.md ("Version drift"):
+`mesa_commit`, `mesa_tree`, `mesa_date`, `mesa_version`, `mesa_base` and
+`Version` in the spec, `Release: 1`, changelog. `make-srpm.sh` refuses a
+commit whose tree or `VERSION` does not match. Each pin gets its own
+directory under `/usr/lib64/apple-silicon-kernel-plus/mesa-coopmat/`.
+
 ## Bumping Reims / QEMU
 
 The two are separate packages, built from separate repositories:
@@ -241,7 +250,7 @@ pair (`GPU_BACKEND_BIN`, see packages/qemu-vmapple/README.md).
 ## COPR
 
 `scripts/copr-setup.sh` (once) creates the project with the
-`fedora-44-aarch64` chroot and seven SCM packages using the `make_srpm`
+`fedora-44-aarch64` chroot and eight SCM packages using the `make_srpm`
 method. The SRPM step has network access in COPR; the RPM builds do not
 need it, so "enable internet" stays off.
 

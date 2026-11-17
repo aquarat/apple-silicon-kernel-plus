@@ -5,15 +5,15 @@
 #   scripts/build-srpms.sh [package...]       default: all packages
 #   OUT=dir scripts/build-srpms.sh            default OUT: <repo>/out
 #
-# Packages: kernel apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus qemu-vmapple
-#           reims-vgpu-backend
+# Packages: kernel apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus mesa-coopmat
+#           qemu-vmapple reims-vgpu-backend
 # Downloads and git checkouts are cached in <repo>/.cache (git-ignored).
 #
 # Environment:
 #   CONTAINER=podman        container tool (default: docker, else podman)
 #   CPUS=2                  CPU limit for the container (default 2)
 #   LINT=1                  also run rpmlint on each SRPM
-#   FEDORA_SRPM, ASAHI_GIT, PREP_CHECK: passed to scripts/make-srpm.sh
+#   FEDORA_SRPM, ASAHI_GIT, MESA_COOPMAT_GIT, PREP_CHECK: passed to scripts/make-srpm.sh
 #   (paths must be inside the repository, which is mounted at /src)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -38,6 +38,7 @@ for p in "${pkgs[@]}"; do
         -e CARGO_BUILD_JOBS="$CPUS" \
         ${PREP_CHECK:+-e PREP_CHECK="$PREP_CHECK"} \
         ${FEDORA_SRPM:+-e FEDORA_SRPM="$FEDORA_SRPM"} ${ASAHI_GIT:+-e ASAHI_GIT="$ASAHI_GIT"} \
+        ${MESA_COOPMAT_GIT:+-e MESA_COOPMAT_GIT="$MESA_COOPMAT_GIT"} \
         -v "$HERE:/src" -w /src "$IMAGE" scripts/make-srpm.sh "$p" "$rel"; then
         # The kernel spec is Fedora's; it is not linted here.
         if [ "${LINT:-0}" = 1 ] && [ "$p" != kernel ]; then
