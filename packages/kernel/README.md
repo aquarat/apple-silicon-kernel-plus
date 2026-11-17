@@ -67,10 +67,11 @@ commit (docs/maintainer-guide.md).
 | 0001 | KVM: handle Apple's PAuth virtualization state (a random VM key per VM, APSTS, and per-vCPU APCTL, KERNKEYLO/HI exposed to user space). Needed by macOS guests on QEMU's `vmapple` machine. Only acts on M1 and M2 CPUs, under VHE on bare metal | always on |
 | 0002 | KVM: decode and emulate MMIO loads/stores that fault without an instruction syndrome (XNU's pre-indexed store to the GIC) | **on**; `kvm.emulate_nisv_ldst=0` turns it off |
 | 0003 | atlantic: keep the station MAC unicast filter enabled on AQC113 (ATL2). 7.2's ATL2 filter rework drops unicast frames to the interface's own address when the firmware's filter base index is above the multicast list length (the Mac Studio's built-in 10GbE: unicast RX dead unless promiscuous) | fix |
+| 0004 | drm/asahi: free BOs that were mapped into the GPU's kernel VM once their mapping is dropped (drain GPUVM's deferred list). Userspace timestamp buffers are mapped there, so every Vulkan process that used them leaked its buffers as unevictable memory (about 239 MB per llama.cpp model load). The relevant part of Asahi's 256b1204c12d, which later asahi-wip commits (7.3.1's base) have | fix |
 
-0001, 0002 and 0003 are this project's own work. 0001 is an independent
+0001, 0002 and 0003 are this project's own work; 0004 is a backport from asahi-wip. 0001 is an independent
 implementation of what Anees Iqbal first showed macOS guests need (see
-`CREDITS.md` and `docs/kvm-pauth-provenance.md`). All three are in `git format-patch` form
+`CREDITS.md` and `docs/kvm-pauth-provenance.md`). All four are in `git format-patch` form
 against the tarball plus `patch-7.2-redhat.patch`; docs/maintainer-guide.md
 shows how to rebase them.
 
