@@ -563,7 +563,8 @@ class EndToEnd(unittest.TestCase):
         return out
 
     def test_dry_run_touches_nothing(self):
-        rc, out = self.run_main("--dry-run", "--url", "http://127.0.0.1:9/never")
+        rc, out = self.run_main("--dry-run", "--download-from-apple", "--url",
+                                "http://127.0.0.1:9/never")
         self.assertEqual(rc, 0, out)
         self.assertIn("Dry run", out)
         self.assertIn("AppleAVE2FW_H13C.im4p", out)
@@ -572,7 +573,8 @@ class EndToEnd(unittest.TestCase):
 
     def test_dry_run_names_the_local_kernelcache(self):
         wr(os.path.join(self.esp, "kernelcache.release.mac13j"), self.kc)
-        rc, out = self.run_main("--dry-run", "--url", "http://127.0.0.1:9/never")
+        rc, out = self.run_main("--dry-run", "--download-from-apple", "--url",
+                                "http://127.0.0.1:9/never")
         self.assertEqual(rc, 0, out)
         self.assertIn("no download", out)
         dl = next(l for l in out.splitlines() if l.startswith("Download:"))
@@ -600,15 +602,51 @@ class EndToEnd(unittest.TestCase):
         ipsw = os.path.join(self.d, "nokc.ipsw")     # an image without the kernelcache
         make_zip(ipsw, {"Firmware/ave/AppleAVE2FW_H13C.im4p": (self.im4p, zipfile.ZIP_DEFLATED)})
         with serve(rd(ipsw)) as (url, _):
-            rc, out = self.run_main("--url", url, "--yes")
+            rc, out = self.run_main("--download-from-apple", "--url", url, "--yes")
         self.assertEqual(rc, 0, out)
         self.assertEqual(len(self.files()), 2)
 
     def test_from_http(self):
         with serve(rd(self.ipsw)) as (url, _):
-            rc, out = self.run_main("--url", url, "--yes")
+            rc, out = self.run_main("--download-from-apple", "--url", url, "--yes")
         self.assertEqual(rc, 0, out)
         self.assertEqual(len(self.files()), 2)
+        self.assertIn("Apple's terms", out)
+        self.assertIn("127.0.0.1", out)
+
+    def test_default_is_local_only(self):
+        # No source option: the EFI partition only, never the network.
+        wr(os.path.join(self.esp, "kernelcache.release.mac13j"), self.kc)
+        with serve(rd(self.ipsw)) as (url, h):
+            T.IPSW_URL, saved = url, T.IPSW_URL
+            try:
+                rc, out = self.run_main("--yes")
+                rc2, out2 = self.run_main("--dry-run")
+            finally:
+                T.IPSW_URL = saved
+            self.assertEqual(h.requests, [], "no request without --download-from-apple")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("--download-from-apple", out)
+        self.assertIn("Nothing was downloaded or installed", out)
+        self.assertNotIn("Notice:", out)
+        self.assertEqual(self.files(), {})
+        self.assertEqual(rc2, 0, out2)
+        self.assertIn("AVE firmware: not found", out2)
+        self.assertIn("no download", out2)
+
+    def test_url_needs_download_from_apple(self):
+        rc, out = self.run_main("--url", "http://127.0.0.1:9/never", "--yes")
+        self.assertEqual(rc, 2, out)
+
+    def test_from_dir_with_the_esp_kernelcache(self):
+        # A directory with only the AVE firmware: the kernelcache comes from the ESP.
+        wr(os.path.join(self.esp, "kernelcache.release.mac13j"), self.kc)
+        root = os.path.join(self.d, "copy")
+        wr(os.path.join(root, "AppleAVE2FW_H13C.im4p"), self.im4p)
+        rc, out = self.run_main("--from-dir", root, "--yes")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(len(self.files()), 2)
+        self.assertNotIn("Notice:", out)
 
     def test_from_dir_im4p_and_img4(self):
         root = os.path.join(self.d, "preboot")

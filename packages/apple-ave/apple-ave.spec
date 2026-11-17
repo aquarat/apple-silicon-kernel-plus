@@ -9,7 +9,7 @@
 
 Name:           apple-ave
 Version:        0.99.6
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        EXPERIMENTAL Apple AVE H.264/HEVC video encoder driver
 License:        GPL-2.0-only
 URL:            https://github.com/aquarat/apple-silicon-kernel-plus
@@ -29,15 +29,18 @@ EXPERIMENTAL. Boot integration and firmware tooling for the Apple Video
 Encoder (AVE) driver:
 - apple-ave-fetch-firmware makes the files the driver needs on this machine,
   from the user's own copy of Apple's macOS 13.5 files: the encoder firmware
-  and the AVE_DPE register tables, read with HTTP range requests from Apple's
-  restore image on Apple's CDN (about 0.5 MB, plus a 26 MB kernelcache unless
-  the Asahi installer left one on the EFI partition), or from a local copy.
-  Every file is checked against known sha256 values.
+  and the AVE_DPE register tables. It reads local files only (the kernelcache
+  the Asahi installer left on the EFI partition, a directory, or a local
+  restore image) unless given --download-from-apple, which reads the missing
+  parts of Apple's restore image from Apple's servers after a notice that
+  this is Apple software under Apple's licence terms. Every file is checked
+  against known sha256 values.
 - apple-ave.service and ave-load load the encoder on supported SoCs (t6000,
   t8103, t8112; t6001 and t6002 after enabling them) and keep the firmware
   data the driver needs for reloads.
-The service is disabled until you enable it. Nothing is downloaded unless you
-run apple-ave-fetch-firmware or enable apple-ave-fetch-firmware.service.
+The services are disabled until you enable them. Nothing is ever downloaded
+unless you run apple-ave-fetch-firmware --download-from-apple yourself;
+apple-ave-fetch-firmware.service uses local files only and has no network.
 Read /usr/share/doc/apple-ave/README.md first.
 
 %package -n dkms-apple-ave
@@ -135,6 +138,13 @@ dkms remove -m apple-ave -v %{version} --all --rpm_safe_upgrade >/dev/null 2>&1 
 %{_libexecdir}/apple-ave/ave-load
 
 %changelog
+* Tue Nov 17 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 0.99.6-2
+- apple-ave-fetch-firmware reads only local files by default (the EFI
+  partition's kernelcache, --from-dir, --ipsw); downloading from Apple's
+  servers needs --download-from-apple, which first prints a notice that the
+  image is Apple software under Apple's licence terms
+- apple-ave-fetch-firmware.service never downloads: no network for it
+
 * Tue Nov 17 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 0.99.6-1
 - AVE driver commit ff8bba6 (upstream pull request 6, issue 5): a reload
   no longer mistakes a pristine DATA blob whose iBoot fills are another

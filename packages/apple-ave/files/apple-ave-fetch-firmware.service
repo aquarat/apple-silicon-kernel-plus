@@ -1,10 +1,14 @@
 [Unit]
-Description=Make the Apple AVE encoder's firmware files from Apple's macOS 13.5 files (opt-in)
+Description=Make the Apple AVE encoder's firmware files from local copies of Apple's macOS 13.5 files (opt-in)
 Documentation=file:///usr/share/doc/apple-ave/apple-ave-firmware.md
-# Enabled by the user only: it may download from Apple's CDN. When the files
-# are in place it does nothing and touches no network.
-Wants=network-online.target
-After=network-online.target
+# Enabled by the user only. It reads local files only and never downloads:
+# there is no --download-from-apple here, and the service has no network.
+# When the files are in place it does nothing. Without options the tool
+# finds the kernelcache on the EFI partition but not the AVE firmware; a
+# drop-in can point it at a local copy, for example:
+#   [Service]
+#   ExecStart=
+#   ExecStart=/usr/bin/apple-ave-fetch-firmware --yes --from-dir /var/lib/apple-ave/macos-13.5
 Before=apple-ave.service
 ConditionPathExists=/proc/device-tree/compatible
 
@@ -12,6 +16,7 @@ ConditionPathExists=/proc/device-tree/compatible
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/bin/apple-ave-fetch-firmware --yes
+PrivateNetwork=yes
 TimeoutStartSec=600
 
 [Install]
