@@ -71,6 +71,13 @@ The Mesa developers, in particular the authors of the Asahi Vulkan driver
 
 ## Firmware tooling
 
-The AVE firmware extraction uses the AVE driver repository's tools,
+`apple-ave-fetch-firmware` and `ave_fwgen.py` (from the AVE driver
+repository) were written for this project and use only Python's standard
+library: their Image4/DER reader and their ZIP reader over local files and
+HTTP range requests (the `RemoteZip` class) are their own code, not taken
+from other projects. They are inspired by, and do the same jobs as,
 [pyimg4](https://github.com/m1stadev/PyIMG4) and
-[remotezip](https://github.com/gtsystem/python-remotezip).
+[python-remotezip](https://github.com/gtsystem/python-remotezip), which the
+AVE driver repository's research tools used to obtain and unpack Apple's
+files; reading only the needed members of an IPSW with range requests is
+also how the Asahi Linux installer fetches macOS firmware.

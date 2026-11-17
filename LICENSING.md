@@ -129,6 +129,62 @@ distributed. With the split this conflict is gone, and the COPR builds both
 packages. This is this project's reading of the licences, not legal advice;
 if an upstream project disagrees, the packages will be withdrawn.
 
-The Reims source in the SRPM also has its tests' small shader fixtures,
-compiled from Reims' own shader sources; they are not built into the
-package.
+The Reims source in the SRPM leaves out what is not Reims' own work or not
+needed to build it: the README's screenshots of macOS (`assets/`) and the
+tests' shader fixtures compiled with Apple's Metal toolchain (`*.metallib`,
+`*.mtlb`, `air/`); the shader sources stay. The vendored crates are checked
+as a whole: every crate in the SRPM, linked or not, must carry a licence
+Fedora allows (`scripts/cargo-vendor-check.py`), and their prebuilt
+binaries (Windows import libraries, wasm runtime objects, test DLLs, none
+used on Linux) are removed.
+
+The QEMU source in the qemu-vmapple SRPM has none of QEMU's prebuilt
+firmware (`pc-bios/`: SeaBIOS, iPXE, EDK2, OpenBIOS, SLOF, U-Boot, OpenSBI,
+device tree blobs and others), whose sources the SRPM does not carry. The
+package installs none of them; vmapple boots the user's own AVPBooter, and
+the one option ROM a guest needs links to Fedora's `ipxe-roms-qemu`.
+
+## Provenance of the reverse-engineered parts
+
+Three parts of these packages describe interfaces of Apple software that
+are not documented:
+
+- the **AVE encoder driver** (apple-ave): the encoder's registers, its
+  firmware's boot handshake and command formats;
+- the **`avp,rtc` clock** in qemu-vmapple (`hw/vmapple/avp-rtc.c` in
+  [aquarat/qemu-reims-vgpu](https://github.com/aquarat/qemu-reims-vgpu)):
+  the register layout of the clock Apple's Virtualization.framework gives
+  macOS guests;
+- **Reims' decoding of the paravirtual GPU's command stream** (the
+  serializer wire format, reims-vgpu-backend): the layout of the records
+  the guest's Metal driver writes.
+
+They were written for interoperability, so that Linux can drive this
+hardware and host these guests, from observation of the hardware and of
+macOS (register state, the bytes Apple's serializer produces) and from
+disassembly of Apple's firmware and drivers. No Apple code and no Apple
+data tables are copied into them: they contain interface facts, such as
+constants, register offsets and bit layouts, command and record formats,
+each stated in this project's own code. Data that is more than that (the
+AVE firmware itself, its register tunables, boot-loader data) is not in
+any package; users make it on their own Mac from their own copy
+([apple-ave](#apple-ave)). How the AVE facts were found, and an item-by-item
+inventory of everything taken from Apple's files with the reason each is
+an interface fact, are in the AVE repository's
+[docs/00-methodology.md](https://github.com/aquarat/apple-m-series-ave-driver/blob/main/docs/00-methodology.md)
+and
+[docs/100-no-apple-data.md](https://github.com/aquarat/apple-m-series-ave-driver/blob/main/docs/100-no-apple-data.md).
+That inventory lists one item as less clear-cut: about fifty individual
+protocol field values that a macOS 13.5 encoding session sends
+(`ave_macos_*_13_5` in `ave_abi.h`), applied only when the
+`session_macos` module parameter asks for them (off by default). The
+clock's register layout is described in the header of `avp-rtc.c`; Reims'
+approach is in its `crates/reims-vgpu-wire/README.md`.
+
+This is not how Asahi Linux works. Asahi Linux's
+[copyright and reverse-engineering policy](https://asahilinux.org/copyright/)
+does not accept code developed alongside disassembly or decompilation of
+Apple binaries (except from specific trusted contributors), and asks
+others for a clean-room process; this project did not follow that process
+for these parts. This project is not affiliated with or endorsed by Asahi
+Linux, and these parts are not Asahi Linux code.
