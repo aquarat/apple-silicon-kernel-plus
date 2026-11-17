@@ -338,7 +338,8 @@ check_protocol() {
 }
 
 # qemu-vmapple: aquarat/qemu-reims-vgpu at the commit in the spec, on its
-# own (no Reims), with QEMU's meson subprojects, so COPR builds offline.
+# own (no Reims), with QEMU's meson subprojects, so COPR builds offline, and
+# without QEMU's prebuilt firmware blobs.
 build_qemu() {
     local spec="$top/SPECS/$pkg.spec" commit short name ver g w
     for c in git meson curl; do command -v "$c" >/dev/null || die "missing $c"; done
@@ -370,6 +371,18 @@ build_qemu() {
         die "meson subprojects download failed"
     find "$w/subprojects" -mindepth 2 -maxdepth 2 -name .git -exec rm -rf {} +
     rm -rf "$w/subprojects/packagecache"
+    # QEMU's prebuilt firmware (pc-bios/: SeaBIOS, iPXE, EDK2, OpenBIOS,
+    # SLOF, U-Boot, OpenSBI, device tree blobs, ...) is not distributed: its
+    # sources are not in the SRPM and this build installs none of it
+    # (--disable-install-blobs; vmapple boots the user's AVPBooter). The
+    # spec's %prep drops the meson rules that read these files. Kept: the
+    # keymaps, descriptors, icons and the sources of the option ROMs.
+    (cd "$w/pc-bios" && rm -f -- *.bin *.rom *.img *.lid *.ndrv *.fd.bz2 openbios-* palcode-* u-boot.* dtb/*.dtb)
+    if find "$w/pc-bios" "$w/pc-bios/dtb" -maxdepth 1 -type f ! -name meson.build ! -name '*.dts' \
+            ! -name README ! -name edk2-licenses.txt ! -name 'qemu-nsis.*' ! -name qemu.rsrc \
+            ! -name qemu_logo.svg | grep .; then
+        die "QEMU $short has other files in pc-bios/; check them and update make-srpm.sh"
+    fi
     log "Source0 qemu-reims-vgpu-$short.tar.xz"
     "${TAR[@]}" -C "$top/stage" -cf - "qemu-reims-vgpu-$short" | xz -T0 -6 > "$top/SOURCES/qemu-reims-vgpu-$short.tar.xz"
     extra_tarball "$name" "$ver"
@@ -377,9 +390,11 @@ build_qemu() {
 }
 
 # reims-vgpu-backend: aquarat/reims-vgpu at the commit in the spec (without
-# its vendor/qemu submodule, which only the in-process build uses) and the
-# Rust crates (cargo vendor, git dependencies included), so COPR builds
-# offline. The spec's bundled(crate()) Provides are filled in here.
+# its vendor/qemu submodule, which only the in-process build uses, its README
+# screenshots of macOS, or its tests' shaders compiled with Apple's Metal
+# toolchain) and the Rust crates (cargo vendor, git dependencies included,
+# without prebuilt binaries), so COPR builds offline. The spec's
+# bundled(crate()) Provides are filled in here.
 build_reims() {
     local spec="$top/SPECS/$pkg.spec" commit short name ver g w ch
     for c in git cargo curl; do command -v "$c" >/dev/null || die "missing $c"; done
@@ -399,6 +414,15 @@ build_reims() {
     git -C "$g" archive HEAD | tar -x -C "$w"
     rm -rf "$w/vendor/qemu"
     rmdir "$w/vendor" 2>/dev/null || :
+    # Not distributed: assets/ (screenshots of macOS for the README) and the
+    # test fixtures made by Apple's Metal toolchain (metallibs, AIR). The
+    # build and %check use neither; the .metal sources stay.
+    rm -rf "$w/assets"
+    find "$w/crates" -path '*/tests/fixtures/*' -type f \( -name '*.metallib' -o -name '*.mtlb' \) -delete
+    find "$w/crates" -path '*/tests/fixtures/air' -type d -prune -exec rm -rf {} +
+    if find "$w" -type f \( -name '*.metallib' -o -name '*.mtlb' -o -name '*.air' \) | grep .; then
+        die "Reims $short has Metal toolchain output outside crates/*/tests/fixtures; update make-srpm.sh"
+    fi
     log "Source0 reims-vgpu-$short.tar.xz"
     "${TAR[@]}" -C "$top/stage" -cf - "reims-vgpu-$short" | xz -T0 -6 > "$top/SOURCES/reims-vgpu-$short.tar.xz"
 
@@ -409,6 +433,12 @@ build_reims() {
     (cd "$w" && CARGO_HOME="$CACHE_DIR/cargo-home" cargo vendor --locked --versioned-dirs \
         "$top/stage/cargo-vendor/vendor" > "$top/stage/cargo-vendor/config.toml" 2>"$top/vendor.log") ||
         { tail -20 "$top/vendor.log" >&2; die "cargo vendor failed"; }
+    # Prebuilt binaries in the crates (Windows import libraries, wasm runtime
+    # objects, test DLLs), none used on aarch64 Linux: removed, and dropped
+    # from the crates' checksum lists (deterministic, so the tarball stays
+    # reproducible).
+    python3 -I "$HERE/scripts/cargo-vendor-check.py" prune "$top/stage/cargo-vendor/vendor" |
+        sed 's/^/   removed prebuilt /' >&2
 
     # The crates linked into the backend, from the vendored sources.
     ch="$top/cargo-home"
@@ -419,28 +449,18 @@ build_reims() {
         sed 's/ (\*)$//' | awk '$1 !~ /^reims-vgpu/ { sub(/^v/, "", $2); print "Provides:       bundled(crate(" $1 ")) = " $2 }' |
         sort -u > "$top/bundled" || { cat "$top/tree.log" >&2; die "cargo tree failed"; }
     [ -s "$top/bundled" ] || die "cargo tree listed no crates"
-    # Every linked crate's licence must be in the spec's License tag: each
-    # part of an AND, at least one choice of an OR.
+    # Licences, of every crate in the SRPM: the linked ones must be in the
+    # spec's License tag, the others (build scripts, proc-macros, crates for
+    # other targets) in it or on Fedora's allowed list (scripts/cargo-vendor-check.py).
     (cd "$w" && CARGO_HOME="$ch" cargo tree --frozen -p reims-vgpu-backend -e no-build,no-dev,no-proc-macro \
-        --prefix none --format '{p}|{l}' 2>>"$top/tree.log") | sed 's/ (\*)$//' | sort -u |
-        python3 -I -c '
-import re, sys
-tag = sys.argv[1]
-have = set(re.findall(r"[A-Za-z0-9.+-]+(?: WITH [A-Za-z0-9.+-]+)?", tag)) - {"AND", "OR"}
-bad = []
-for line in sys.stdin:
-    crate, _, lic = line.rstrip("\n").rpartition("|")
-    lic = lic.replace("/", " OR ").strip()
-    if not lic:
-        bad.append(crate + ": no licence"); continue
-    if " OR " in lic and " AND " not in lic:
-        if not any(x.strip("() ") in have for x in lic.split(" OR ")):
-            bad.append(crate + ": " + lic)
-    elif any(x.strip("() ") not in have for x in re.split(r" AND | OR ", lic)):
-        bad.append(crate + ": " + lic)
-if bad:
-    sys.exit("licences not in the License tag:\n  " + "\n  ".join(bad))
-' "$(spec_value "$spec" '%{license}')" || die "update the License tag in $pkg.spec"
+        --prefix none --format '{p}' 2>>"$top/tree.log") | sed 's/ (\*)$//' |
+        awk '{ sub(/^v/, "", $2); print $1, $2 }' | sort -u > "$top/linked" ||
+        { cat "$top/tree.log" >&2; die "cargo tree failed"; }
+    (cd "$w" && CARGO_HOME="$ch" cargo metadata --frozen --format-version 1 > "$top/metadata.json" 2>"$top/metadata.log") ||
+        { tail -20 "$top/metadata.log" >&2; die "cargo metadata failed"; }
+    python3 -I "$HERE/scripts/cargo-vendor-check.py" licences "$(spec_value "$spec" '%{license}')" \
+        "$top/metadata.json" "$top/linked" "$top/stage/cargo-vendor/vendor" >&2 ||
+        die "update the License tag in $pkg.spec, or the allowed list in scripts/cargo-vendor-check.py"
     grep -qx '# @BUNDLED_CRATES@' "$spec" || die "$pkg.spec has no @BUNDLED_CRATES@ line"
     sed -i -e "/^# @BUNDLED_CRATES@\$/{r $top/bundled" -e 'd}' "$spec"
     log "$(wc -l < "$top/bundled") bundled crates"

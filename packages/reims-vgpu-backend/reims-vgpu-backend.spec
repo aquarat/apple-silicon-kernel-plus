@@ -23,7 +23,7 @@
 
 Name:           reims-vgpu-backend
 Version:        %{crate_version}^%{reims_date}git%(c=%{reims_commit}; echo ${c:0:7})
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Reims paravirtual GPU for macOS guests, as a separate process
 # Reims: LICENSE and README say LGPL-3.0-or-later, as does the backend
 # crate's Cargo.toml; the other Reims crates' Cargo.toml say
@@ -131,6 +131,13 @@ grep -q -- '--socket' usage.txt
 %{_libexecdir}/qemu-vmapple/reims-vgpu-backend
 
 %changelog
+* Tue Nov 17 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 0.1.0^20261110git3db7ff2-2
+- Source only, the binary is unchanged: the SRPM no longer carries Reims'
+  README screenshots of macOS or its tests' shaders compiled with Apple's
+  Metal toolchain, nor the vendored crates' prebuilt binaries (Windows
+  import libraries, wasm runtime objects, test DLLs); every vendored crate's
+  licence is now checked, not only the linked ones'.
+
 * Tue Nov 10 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 0.1.0^20261110git3db7ff2-1
 - reims-vgpu 3db7ff2: blits into and out of a texture laid over a buffer
   (newTextureWithDescriptor:offset:bytesPerRow:) work at any row pitch;

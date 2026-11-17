@@ -27,6 +27,19 @@ mapfile -t all < <("$HERE/scripts/make-srpm.sh" --list)
 pkgs=("$@")
 [ ${#pkgs[@]} -gt 0 ] || pkgs=("${all[@]}")
 
+# On an SELinux host the container cannot read the bind-mounted repository
+# (rootless podman, or docker with SELinux enabled) unless labelling is off
+# for it. That changes nothing on the host, unlike a :z relabel. Rootless
+# podman also maps -u to a sub-UID, which cannot write to the repository:
+# keep the caller's UID there instead.
+sec=()
+if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
+    sec=(--security-opt label=disable)
+fi
+if [ "$("$tool" info --format '{{.Host.Security.Rootless}}' 2>/dev/null)" = true ]; then
+    sec+=(--userns=keep-id)
+fi
+
 "$tool" build -q -t "$IMAGE" -f "$HERE/container/Containerfile" "$HERE/container" >/dev/null
 mkdir -p "$OUT" "$HERE/.cache"
 case $OUT in "$HERE"/*) rel=${OUT#"$HERE"/} ;; *) echo "OUT must be inside the repository" >&2; exit 1 ;; esac
@@ -34,7 +47,7 @@ case $OUT in "$HERE"/*) rel=${OUT#"$HERE"/} ;; *) echo "OUT must be inside the r
 fail=()
 for p in "${pkgs[@]}"; do
     echo "=== $p"
-    if "$tool" run --rm --cpus="$CPUS" -u "$(id -u):$(id -g)" -e HOME=/tmp \
+    if "$tool" run --rm ${sec[@]+"${sec[@]}"} --cpus="$CPUS" -u "$(id -u):$(id -g)" -e HOME=/tmp \
         -e CARGO_BUILD_JOBS="$CPUS" \
         ${PREP_CHECK:+-e PREP_CHECK="$PREP_CHECK"} \
         ${FEDORA_SRPM:+-e FEDORA_SRPM="$FEDORA_SRPM"} ${ASAHI_GIT:+-e ASAHI_GIT="$ASAHI_GIT"} \
@@ -42,7 +55,7 @@ for p in "${pkgs[@]}"; do
         -v "$HERE:/src" -w /src "$IMAGE" scripts/make-srpm.sh "$p" "$rel"; then
         # The kernel spec is Fedora's; it is not linted here.
         if [ "${LINT:-0}" = 1 ] && [ "$p" != kernel ]; then
-            "$tool" run --rm -u "$(id -u):$(id -g)" -v "$HERE:/src" -w /src "$IMAGE" \
+            "$tool" run --rm ${sec[@]+"${sec[@]}"} -u "$(id -u):$(id -g)" -v "$HERE:/src" -w /src "$IMAGE" \
                 sh -c "rpmlint -c packages/rpmlint.toml $rel/$p-[0-9]*.src.rpm || :"
         fi
     else
