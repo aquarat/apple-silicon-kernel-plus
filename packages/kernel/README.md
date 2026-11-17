@@ -103,9 +103,9 @@ that repository (its `scripts/make-patches.sh` regenerates it for a new
 base) and bump the release as `Kernel release naming` says. Known issues and
 limits are in that repository's README.
 
-### Thunderbolt networking (thunderbolt-net), patches 0020-0026
+### Thunderbolt networking (thunderbolt-net), patches 0020-0027
 
-`patches/tb-net/` of the same repository (commit a71c646), for IP over a
+`patches/tb-net/` of the same repository (commit 1648a11), for IP over a
 USB4/Thunderbolt cable between two Macs (or a Mac and another host):
 
 - 0020, 0021: end-to-end flow control on the transmit ring too, for the
@@ -125,6 +125,13 @@ USB4/Thunderbolt cable between two Macs (or a Mac and another host):
   a normal-MTU interface (before, a Mac bridged to a LAN through another
   Mac crawled at about 1 Mbit/s unless TSO was off on it; not
   Apple-specific).
+- 0027: the receiver in 0026 cuts a forwarded TSO packet at its own MTU,
+  because ThunderboltIP does not carry the segment size. When path MTU
+  discovery or an MSS clamp lowered the sender's MSS (a tunnel or overlay
+  network behind the bridging Mac), those segments are too large for the
+  smaller hop and TCP crawled at under 1 MB/s. The sender now keeps TSO only
+  for full-sized segments and segments the rest in software (from 7.3.1
+  `plus2`; every sender needs it; not Apple-specific).
 
 Measured Mac Studio M1 Max to MacBook Pro M1 Max: 21 Gb/s single stream,
 14-15 Gb/s each way bidirectional, at MTU 1500 or 65522, no lost frames.

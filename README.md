@@ -70,7 +70,8 @@ The kernel is `<Linux version>-<N>.asahiwip.plus<M>.fc44`:
 | this project, 7.2.11 with Thunderbolt networking | `7.2.11-900.asahiwip.plus2.fc44` | `7.2.11-900.asahiwip.plus2.fc44.aarch64+16k` |
 | this project, 7.2.11 with forwardable TSO | `7.2.11-900.asahiwip.plus3.fc44` | `7.2.11-900.asahiwip.plus3.fc44.aarch64+16k` |
 | this project, 7.2.15 | `7.2.15-900.asahiwip.plus1.fc44` | `7.2.15-900.asahiwip.plus1.fc44.aarch64+16k` |
-| this project now | `7.3.1-900.asahiwip.plus1.fc44` | `7.3.1-900.asahiwip.plus1.fc44.aarch64+16k` |
+| this project, 7.3.1 | `7.3.1-900.asahiwip.plus1.fc44` | `7.3.1-900.asahiwip.plus1.fc44.aarch64+16k` |
+| this project now (thunderbolt-net TSO for a lowered MSS) | `7.3.1-900.asahiwip.plus2.fc44` | `7.3.1-900.asahiwip.plus2.fc44.aarch64+16k` |
 
 - The version is the Linux release the pinned Asahi commit is based on
   (`KERNEL_VERSION` in `packages/kernel/kernel-plus.conf`).
