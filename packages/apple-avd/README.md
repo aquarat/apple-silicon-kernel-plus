@@ -12,6 +12,7 @@ AV1 (as far as the in-tree driver does).
 | 0002 | A slice that references a DPB entry that is not valid (e.g. a stream joined mid-GOP) faults the decoder's IOMMU and resets it. Such slices are now rejected with `-EINVAL`. |
 | 0003 | The job segment table is allocated contiguously for every frame (8 MB in 7.1, about 170 KB for a 1296-line stream in 7.2, more while it grows); under memory pressure frames are lost. Now `kvcalloc()`. |
 | 0004 | When an H.264 slice fails early (no memory for the slice or a bigger table), its media request is never completed, so every later request on the context fails with `EBUSY`, and the freed job table stays in use by the rest of the frame. 7.1's version of this patch fixed the then-missing `slice_num` reset (streams stopped after 4096 slices); 7.2 has that fix itself. |
+| 0005 | 7.2.15's driver reads the codec list from a config block in the firmware and fails the probe when there is none, so firmware built before that block (avd-fw before 0.2) leaves the machine without a decoder. The patch falls back to the SoC's list with a warning. |
 
 Measurements and details are in each patch's message.
 
@@ -21,7 +22,7 @@ Measurements and details are in each patch's message.
 |---|---|
 | `src/` | the driver source DKMS builds: `scripts/rebase-avd.sh` output for the kernel in the spec's `base_kernel` |
 | `patches/` | the fixes, in `git format-patch` form against the pristine driver plus our out-of-tree `Makefile`/`Kbuild` |
-| `dkms.conf` | `BUILD_EXCLUSIVE_KERNEL="^7\.2\..*asahi.*"`: one kernel series |
+| `dkms.conf` | `BUILD_EXCLUSIVE_KERNEL="^7\.[23]\..*asahi.*"`: the 7.2 and 7.3 drivers are the same source |
 | `depmod-apple-avd.conf` | makes modprobe prefer the DKMS module (in `extra/`) to the in-tree one |
 
 ## Checks after installing

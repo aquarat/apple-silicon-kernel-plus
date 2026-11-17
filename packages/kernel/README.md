@@ -1,12 +1,12 @@
 # packages/kernel
 
 **Experimental.** The kernel is built from the Asahi Linux kernel tree's
-`asahi-wip` branch (Linux 7.2.11), not from a kernel `@asahi` has
-released. `asahi-wip` is Asahi's integration branch: it carries work that
-is not in any Fedora Asahi Remix kernel yet, among it the Thunderbolt/USB4
-series for Apple silicon. The commit pinned here is the one this project
-soak-tested Thunderbolt on, but it has not had the testing a `@asahi`
-release gets. If you want the stock kernel's stability, do not use this
+`asahi-wip` branch (Linux 7.3.1, commit c2e6784b008c of 2026-11-05), not
+from a kernel `@asahi` has released: there is no `asahi-7.3` tag and no
+`@asahi` 7.3 kernel yet. `asahi-wip` is Asahi's integration branch: it
+carries work that is not in any Fedora Asahi Remix kernel yet. (7.2.15 was
+built from the `asahi-7.2.15-2` release tag instead.) The commit pinned here
+has not had the testing a `@asahi` release gets. If you want the stock kernel's stability, do not use this
 COPR's kernel (README.md, Rollback).
 
 The packages are still Fedora's `kernel-16k-*`, built by Fedora's
@@ -21,8 +21,8 @@ grub entries).
 
 | | what | pinned by |
 |---|---|---|
-| Source0 `linux-7.2.11.tar.xz` | the kernel.org tarball | `LINUX_TARBALL_URL`, `LINUX_TARBALL_SHA256` |
-| `kernel.spec`, scripts, other sources | Fedora's `kernel-7.2.11-200.fc44` SRPM from Koji | `FEDORA_SRPM_URL`, `FEDORA_SRPM_SHA256` |
+| Source0 `linux-7.3.1.tar.xz` | the kernel.org tarball | `LINUX_TARBALL_URL`, `LINUX_TARBALL_SHA256` |
+| `kernel.spec`, scripts, other sources | Fedora's `kernel-7.3.1-200.fc44` SRPM from Koji | `FEDORA_SRPM_URL`, `FEDORA_SRPM_SHA256` |
 | `patch-7.2-redhat.patch` | generated: the [AsahiLinux/linux](https://github.com/AsahiLinux/linux) tree at `ASAHI_COMMIT` plus Fedora's own `patch-7.2-redhat.patch`, as one diff against the tarball | `ASAHI_COMMIT` (a full commit id: the content) |
 | `linux-kernel-test.patch` | `patches/*.patch`, in file name order | this directory |
 | `kernel-*-fedora.config` | Fedora's configs with `configs/asahi-*.config` and `configs/plus-*.config` applied | this directory |
@@ -30,7 +30,7 @@ grub entries).
 This is the layout of `@asahi`'s own SRPMs: their `patch-<major>-redhat.patch`
 is the Asahi tree plus Fedora's patch, and their `kernel.spec` is
 Fedora's with a few settings changed. `make-srpm.sh` makes the same
-changes to Fedora's 7.2.11 spec:
+changes to Fedora's 7.3.1 spec:
 
 - `%define _with_arm64_16k 1`: the 16k variant, which Fedora does not build;
 - `%define pkgrelease`/`specrelease`: this project's release
@@ -66,14 +66,18 @@ commit (docs/maintainer-guide.md).
 |---|---|---|
 | 0001 | KVM: handle Apple's PAuth virtualization state (a random VM key per VM, APSTS, and per-vCPU APCTL, KERNKEYLO/HI exposed to user space). Needed by macOS guests on QEMU's `vmapple` machine. Only acts on M1 and M2 CPUs, under VHE on bare metal | always on |
 | 0002 | KVM: decode and emulate MMIO loads/stores that fault without an instruction syndrome (XNU's pre-indexed store to the GIC) | **on**; `kvm.emulate_nisv_ldst=0` turns it off |
-| 0003 | atlantic: keep the station MAC unicast filter enabled on AQC113 (ATL2). 7.2's ATL2 filter rework drops unicast frames to the interface's own address when the firmware's filter base index is above the multicast list length (the Mac Studio's built-in 10GbE: unicast RX dead unless promiscuous) | fix |
-| 0004 | drm/asahi: free BOs that were mapped into the GPU's kernel VM once their mapping is dropped (drain GPUVM's deferred list). Userspace timestamp buffers are mapped there, so every Vulkan process that used them leaked its buffers as unevictable memory (about 239 MB per llama.cpp model load). The relevant part of Asahi's 256b1204c12d, which later asahi-wip commits (7.3.1's base) have | fix |
+| 0003 | atlantic: enable the AQC113 (ATL2) unicast/multicast list filters relative to the firmware's filter base index. Asahi's own fix keeps the station MAC filter on (unicast RX on the Mac Studio's built-in 10GbE), but still switches list entries off unless the list is longer than the base index, so multicast is lost unless the port is promiscuous | fix |
 
-0001, 0002 and 0003 are this project's own work; 0004 is a backport from asahi-wip. 0001 is an independent
+0001, 0002 and 0003 are this project's own work. 0001 is an independent
 implementation of what Anees Iqbal first showed macOS guests need (see
-`CREDITS.md` and `docs/kvm-pauth-provenance.md`). All four are in `git format-patch` form
-against the tarball plus `patch-7.2-redhat.patch`; docs/maintainer-guide.md
-shows how to rebase them.
+`CREDITS.md` and `docs/kvm-pauth-provenance.md`); on 7.3.1 it is the
+7.2.11 `plus4` patch with its context rebased. Up to 7.2.11, 0003 was a
+larger patch that also kept the station MAC filter on; Asahi's tree does
+that itself now. All three are in `git format-patch` form against the
+tarball plus `patch-7.3-redhat.patch`; docs/maintainer-guide.md
+shows how to rebase them. (7.2.11 `plus5` also carried 0004, a backport
+of Asahi's fix for GPU kernel-VM buffers that were never freed; 7.3.1's
+Asahi base has that fix, so 0004 is not needed here.)
 
 0002 was off by default up to the 7.1.13 kernels and is on from 7.2.11:
 macOS guests need it, Linux guests never trigger it, and with it on KVM
@@ -130,8 +134,8 @@ USB4/Thunderbolt cable between two Macs (or a Mac and another host):
   discovery or an MSS clamp lowered the sender's MSS (a tunnel or overlay
   network behind the bridging Mac), those segments are too large for the
   smaller hop and TCP crawled at under 1 MB/s. The sender now keeps TSO only
-  for full-sized segments and segments the rest in software (from `plus5`;
-  every sender needs it; not Apple-specific).
+  for full-sized segments and segments the rest in software (from 7.3.1
+  `plus2`; every sender needs it; not Apple-specific).
 
 Measured Mac Studio M1 Max to MacBook Pro M1 Max: 21 Gb/s single stream,
 14-15 Gb/s each way bidirectional, at MTU 1500 or 65522, no lost frames.
@@ -178,7 +182,7 @@ own.
 
 How new 7.2 symbols get their values, deterministically:
 
-1. Symbols that are new in Linux 7.2 itself: Fedora's 7.2.11 configs
+1. Symbols that are new in Linux 7.2 itself: Fedora's 7.2 configs
    already set every one of them (Fedora's own config process requires
    it). Those values are used.
 2. Symbols that only the Asahi tree has: `@asahi`'s 7.1.13 choices

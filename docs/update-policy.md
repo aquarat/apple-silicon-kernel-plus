@@ -6,7 +6,8 @@ of response times.
 ## kernel
 
 - The kernel is the Asahi Linux kernel tree at one commit of its
-  `asahi-wip` branch, pinned in `packages/kernel/kernel-plus.conf`
+  `asahi-wip` branch, or of `asahi` when `asahi-wip` has moved past the
+  series in use (7.2.15), pinned in `packages/kernel/kernel-plus.conf`
   together with the Linux release it is based on and the Fedora kernel
   SRPM of that release. It is **experimental**: `asahi-wip` is Asahi's
   integration branch, not a release.
@@ -32,14 +33,16 @@ of response times.
   back to being a rebuild of `@asahi`'s (scripts/asahi-kernel.py still
   finds those SRPMs).
 - Kernels are install-only; dnf keeps the previous ones (default:
-  `installonly_limit=3`). Booting a 7.1 kernel while a 7.2 kernel is
-  installed needs the device-tree step in README.md, Rollback.
+  `installonly_limit=3`). Booting a 7.1 kernel while a 7.2 or later kernel
+  is installed needs the device-tree step in README.md, Rollback.
 
 ## dkms-apple-avd
 
-- DKMS builds it for every installed 7.2 kernel from this project with
-  its `-devel` package (`BUILD_EXCLUSIVE_KERNEL`); kernels of other series
-  (the 7.1 kernels) use their in-tree decoder.
+- DKMS builds it for every installed 7.2 and 7.3 kernel from this
+  project with its `-devel` package (`BUILD_EXCLUSIVE_KERNEL`; the 7.2.15
+  and 7.3.1 drivers are the same source), so a 7.2 kernel kept for
+  rollback keeps the patched decoder; kernels of other series (the 7.1
+  kernels) use their in-tree decoder.
 - When this project's kernel moves to a new kernel series, DKMS skips the
   module for that series and the in-tree decoder is used, until this
   project rebases the driver (maintainer guide). The in-tree driver has the problems the patches

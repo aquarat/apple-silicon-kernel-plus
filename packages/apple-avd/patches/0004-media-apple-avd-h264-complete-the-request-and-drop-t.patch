@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Sun, 13 Sep 2026 11:54:30 +0000
-Subject: [PATCH 4/4] media: apple: avd: h264: complete the request and drop
+Subject: [PATCH 4/5] media: apple: avd: h264: complete the request and drop
  the job on early errors
 
 avd_h264_run() leaves through err_free_jobs when growing the slice table

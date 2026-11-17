@@ -51,6 +51,9 @@ that `asahi-wip` (or kernel.org, or `@asahi`) moved. To move:
 
 1. Pick the commit: `git ls-remote https://github.com/AsahiLinux/linux.git
    refs/heads/asahi-wip`, or a later one that has run on test machines.
+   When `asahi-wip` has moved to the next series and the kernel stays on
+   the current one, take the newest `asahi-<version>-<n>` tag of branch
+   `asahi` instead (7.2.15; set `ASAHI_BRANCH=asahi`).
    Read its Makefile for the Linux version it is based on.
 2. If the Linux version changed: `KERNEL_VERSION`, `LINUX_TARBALL_URL`
    and `LINUX_TARBALL_SHA256` (kernel.org's `sha256sums.asc`), and

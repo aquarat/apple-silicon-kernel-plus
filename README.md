@@ -1,7 +1,7 @@
 # apple-silicon-kernel-plus
 
 RPM packages for Fedora Asahi Remix on Apple silicon Macs: a kernel from
-the Asahi Linux kernel tree's `asahi-wip` branch (Linux 7.2, with
+the Asahi Linux kernel tree (Linux 7.3, with
 Thunderbolt/USB4 host support) and KVM patches for macOS guests, packaged
 like the Fedora Asahi kernel; video decoder and encoder drivers, a patched
 Vulkan driver, and QEMU for macOS guests with its paravirtual GPU as a
@@ -16,7 +16,7 @@ Linux or Fedora; report them here.
 
 | package | what | status |
 |---|---|---|
-| `kernel` (`kernel-16k-*`) | Fedora's `kernel-16k` packages built from the Asahi Linux kernel tree (`asahi-wip`, Linux 7.2.11) with `@asahi`'s configuration, the Thunderbolt/USB4 host driver and the tunnelled-PCIe driver (`pcie-apple-apciec`, NVMe in Thunderbolt enclosures on M1 Pro/Max/Ultra) as modules, an AQC113 10GbE fix, and two KVM patches for macOS guests: Apple PAuth VM-key context and emulation of MMIO loads/stores without a syndrome (both on). [packages/kernel](packages/kernel) | **experimental** ([why](packages/kernel/README.md)) |
+| `kernel` (`kernel-16k-*`) | Fedora's `kernel-16k` packages built from the Asahi Linux kernel tree (`asahi-wip`, Linux 7.3.1) with `@asahi`'s configuration, the Thunderbolt/USB4 host driver and the tunnelled-PCIe driver (`pcie-apple-apciec`, NVMe in Thunderbolt enclosures on M1 Pro/Max/Ultra) as modules, an AQC113 10GbE fix, and two KVM patches for macOS guests: Apple PAuth VM-key context and emulation of MMIO loads/stores without a syndrome (both on). [packages/kernel](packages/kernel) | **experimental** ([why](packages/kernel/README.md)) |
 | `apple-silicon-thunderbolt` | udev rules: NVMe power-state transitions (APST) off for drives in Thunderbolt enclosures only (they drop the USB4 link otherwise), and threaded NAPI with GRO off for Thunderbolt networking (thunderbolt-net). [packages/apple-silicon-thunderbolt](packages/apple-silicon-thunderbolt) | experimental |
 | `dkms-apple-avd` | The Asahi AVD video decoder driver with four fixes for long-running streams, built by DKMS. [packages/apple-avd](packages/apple-avd) | stable |
 | `apple-ave`, `dkms-apple-ave` | A V4L2 H.264/HEVC encoder driver for the AVE block, reverse engineered, and `apple-ave-fetch-firmware`, which makes its firmware files on your Mac from Apple's own image. No Apple firmware or Apple data included. [packages/apple-ave](packages/apple-ave) | **experimental** ([why](packages/apple-ave/README.md#status)) |
@@ -31,7 +31,7 @@ As the sources state; "tested" means on at least one machine of that SoC.
 
 | package | SoCs |
 |---|---|
-| kernel | what the Asahi tree supports (M1 and M2 families). Thunderbolt/USB4: the Asahi tree's device trees describe it for t8103, t8112 and t600x; USB3 tunnels and XDomain (thunderbolt-net, with this project's flow-control, page-pool, per-machine UID and forwarding patches; tested Mac-to-Mac between t6001, t8103 and t6002, including a Mac bridging its 10GbE port and Thunderbolt ports for other Macs that reach the LAN only over Thunderbolt); PCIe tunnels on t600x with `pcie-apple-apciec` (tested on t6001, Mac Studio port 3, NVMe enclosure; known issues in [apple-silicon-thunderbolt-linux](https://github.com/aquarat/apple-silicon-thunderbolt-linux#status-and-known-issues)); no DisplayPort tunnels. The KVM PAuth patch acts only on M1 and M2 CPUs (t8103, t6000, t6001, t6002; t8112, t6020, t6021, t6022), under VHE on bare metal; tested on t6001 and t6002 (macOS guests, plus3), and its plus4 rewrite on t6001 |
+| kernel | what the Asahi tree supports (M1 and M2 families). Thunderbolt/USB4: the Asahi tree's device trees describe it for t8103, t8112 and t600x; USB3 tunnels and XDomain (thunderbolt-net, with this project's flow-control, page-pool, per-machine UID and forwarding patches; tested Mac-to-Mac between t6001, t8103 and t6002, including a Mac bridging its 10GbE port and Thunderbolt ports for other Macs that reach the LAN only over Thunderbolt); PCIe tunnels on t600x with `pcie-apple-apciec` (tested on t6001, Mac Studio port 3, NVMe enclosure; known issues in [apple-silicon-thunderbolt-linux](https://github.com/aquarat/apple-silicon-thunderbolt-linux#status-and-known-issues)); no DisplayPort tunnels. The KVM PAuth patch acts only on M1 and M2 CPUs (t8103, t6000, t6001, t6002; t8112, t6020, t6021, t6022), under VHE on bare metal; tested on t6001 and t6002 (macOS guests, plus3), and its plus4 rewrite on t6001 (7.2.11; the 7.3.1 rebase is build-tested only) |
 | dkms-apple-avd | M1 family (t8103, t6000, t6001, t6002); t8112: H.264 works, HEVC times out (open) |
 | apple-ave | t6000, t8103 (H.264 without B frames), t8112; t6001 and t6002 after enabling them (not yet run in this configuration). All with the macOS 13.5 system firmware |
 | mesa-honeykrisp-plus | M1 and M2 GPUs, as Mesa's Asahi driver |
@@ -54,7 +54,7 @@ sudo dnf install dkms-apple-avd       # and/or: apple-ave, mesa-honeykrisp-plus,
 DKMS packages need `kernel-16k-devel` for each installed kernel.
 
 **Enabling this COPR moves you to this project's kernel, and that kernel is
-experimental.** It is Linux 7.2 from Asahi's integration branch, while
+experimental.** It is Linux 7.3 from Asahi's integration branch, while
 `@asahi` ships 7.1; it sorts as newer than every `@asahi` 7.1 kernel, so
 `dnf upgrade` installs it and makes it the default boot entry. Read
 [Rollback](#rollback) before you do: going back to a 7.1 kernel needs one
@@ -72,7 +72,11 @@ The kernel is `<Linux version>-<N>.asahiwip.plus<M>.fc44`:
 | this project, 7.2.11 with Thunderbolt networking | `7.2.11-900.asahiwip.plus2.fc44` | `7.2.11-900.asahiwip.plus2.fc44.aarch64+16k` |
 | this project, 7.2.11 with TSO forwarding | `7.2.11-900.asahiwip.plus3.fc44` | `7.2.11-900.asahiwip.plus3.fc44.aarch64+16k` |
 | this project, 7.2.11 with the independent PAuth patch | `7.2.11-900.asahiwip.plus4.fc44` | `7.2.11-900.asahiwip.plus4.fc44.aarch64+16k` |
-| this project now (thunderbolt-net TSO for a lowered MSS, Asahi GPU kernel-VM BO leak) | `7.2.11-900.asahiwip.plus5.fc44` | `7.2.11-900.asahiwip.plus5.fc44.aarch64+16k` |
+| this project, 7.2.11 with thunderbolt-net TSO for a lowered MSS and the GPU kernel-VM BO leak fix (branch `kernel-7.2`) | `7.2.11-900.asahiwip.plus5.fc44` | `7.2.11-900.asahiwip.plus5.fc44.aarch64+16k` |
+| this project, 7.2.15 | `7.2.15-900.asahiwip.plus1.fc44` | `7.2.15-900.asahiwip.plus1.fc44.aarch64+16k` |
+| this project, 7.3.1 | `7.3.1-900.asahiwip.plus1.fc44` | `7.3.1-900.asahiwip.plus1.fc44.aarch64+16k` |
+| this project, 7.3.1 with thunderbolt-net TSO for a lowered MSS | `7.3.1-900.asahiwip.plus2.fc44` | `7.3.1-900.asahiwip.plus2.fc44.aarch64+16k` |
+| this project now (7.3.1, independent PAuth patch) | `7.3.1-900.asahiwip.plus3.fc44` | `7.3.1-900.asahiwip.plus3.fc44.aarch64+16k` |
 
 - The version is the Linux release the pinned Asahi commit is based on
   (`KERNEL_VERSION` in `packages/kernel/kernel-plus.conf`).
@@ -80,7 +84,9 @@ The kernel is `<Linux version>-<N>.asahiwip.plus<M>.fc44`:
   one for each newer Asahi commit on the same Linux version. 900 is above
   any release number `@asahi` uses (400 and up), so for the same Linux
   version this project's kernel sorts first.
-- `asahiwip` says where the source comes from; `plus<M>` (`BUILDID`) goes
+- `asahiwip` says where the source comes from (the Asahi tree; the name
+  stayed when the pin moved from the `asahi-wip` branch to an `asahi` tag
+  at 7.2.15); `plus<M>` (`BUILDID`) goes
   up when only this project's patches, configs or packaging change, and
   back to `plus1` when `N` or the version changes.
 
@@ -112,11 +118,11 @@ dnf then takes `kernel-16k` only from this repository.
 ## Rollback
 
 Kernels are install-only: the previous ones stay installed and are listed
-in the boot menu. **But do not boot a 7.1 kernel while a 7.2 kernel from
-this project is installed.** m1n1 gives the kernel the device trees in the
+in the boot menu. **But do not boot a 7.1 kernel while a 7.2 or later kernel
+from this project is installed.** m1n1 gives the kernel the device trees in the
 EFI partition's `m1n1/boot.bin`, and `update-m1n1` writes the device trees
 of the newest installed kernel there. A 7.1 kernel booted with the 7.2
-Asahi device trees hung in testing before the network came up (the likely
+(or later) Asahi device trees hung in testing before the network came up (the likely
 cause: the display controller's IOMMU cells changed in 7.2). So point `/boot/dtb` (what `update-m1n1` reads) at the 7.1
 kernel's trees before you boot it:
 
@@ -176,7 +182,7 @@ checks each against known sha256 values:
 
 Short version ([docs/update-policy.md](docs/update-policy.md)):
 
-- **kernel:** a pinned commit of the Asahi tree's `asahi-wip` branch,
+- **kernel:** a pinned commit of the Asahi tree,
   moved by hand after it has run on test machines. A daily job reports
   when `asahi-wip`, kernel.org's stable series or `@asahi` move, and starts
   the COPR build after a bump is merged. Stable and security fixes arrive

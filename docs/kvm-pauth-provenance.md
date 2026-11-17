@@ -140,6 +140,21 @@ without 0001 (`7.2.11-900.asahiwip.nopac1`; none of the new symbols in
 - the nVHE paths (`kvm-arm.mode=nvhe` is rejected on M1 Max);
 - M2 hardware.
 
+## The 7.3.1 rebase (2026-11-17)
+
+On the 7.3.1 kernel, 0001 is the `plus4` patch above, rebased by
+context only, as the maintainer guide asks (from its own history, never
+from the pre-`plus4` patch). Five of its seven files applied unchanged;
+two hunks needed new context and no code change:
+- `arch/arm64/include/asm/kvm_host.h`: `apple_vmkey[2]` still follows
+  `sysreg_masks` in `struct kvm_arch`; 7.3 has a different field after it;
+- `arch/arm64/tools/cpucaps`: `HAS_PAUTH_VIRT_APPLE` still follows
+  `HAS_PAN`; 7.3 added capabilities before it.
+
+The commit message is unchanged. The 7.3.1 rebase is build-tested (the
+KVM and arm64 kernel objects compile on Asahi `c2e6784b008c`); it has not
+yet run a macOS guest.
+
 ## Credit
 
 Anees Iqbal first showed that macOS guests under KVM need this state. The
