@@ -23,7 +23,7 @@ jobs:
         run: container/install-tools.sh
       - name: shellcheck
         run: |
-          shellcheck -x scripts/*.sh container/install-tools.sh \
+          shellcheck -x scripts/*.sh container/install-tools.sh tests/kernel-build-check/*.sh \
             packages/apple-ave/files/ave-load packages/apple-ave/firmware/install-firmware \
             packages/mesa-honeykrisp-plus/honeykrisp-plus packages/mesa-coopmat/with-coopmat
       - name: Python scripts compile
@@ -32,6 +32,8 @@ jobs:
             packages/apple-ave/firmware/ave_fwgen.py
           python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' \
             packages/apple-ave/firmware/apple-ave-fetch-firmware
+      - name: kernel-build-check tests (synthetic tree)
+        run: tests/kernel-build-check/test-owning-dirs.sh
       - name: apple-ave tests (synthetic files, no network)
         run: python3 -m unittest discover -s packages/apple-ave/tests -v
       - name: Specs parse (rpmspec -P)

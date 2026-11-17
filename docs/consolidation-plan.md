@@ -64,19 +64,31 @@ APCIEC as modules), apple-avd 0001-0004/0005, apple-ave 0.99.5.
    kernel kept for rollback keeps the patched decoder. No in-tree AVD
    patches for now.
 5. **PMP device trees stay out** of this project.
-6. **CI compile job: added** (see CI).
+6. **CI compile job** (see CI).
 7. **VRR experiments stay out.**
 
-## Done
+## Status
 
-- **7.3: the independent PAuth patch** (#6, 7.3.1 `plus3`): `main`'s
-  0001 rebased to 7.3.1 by context only (two hunks, no code change), and
-  `main` merged into the 7.3 line.
-- **7.3.1 on `main`** (#9): the 7.3 line with `main` merged in (apple-ave
-  0.99.6). 7.2.11 `plus5`'s 0004 is not carried: the 7.3.1 Asahi base has
-  that fix.
-- The mirror tag `plus/asahi-wip-7.3.1-c2e6784b008c` is in
+Done, on `main` unless stated:
+
+- **7.3: the independent PAuth patch**: #6 (into `kernel-7.3`), on `main`
+  through #9. `main`'s 0001 rebased to 7.3.1 by context only (two hunks,
+  no code change).
+- **thunderbolt-net TSO for a lowered MSS (0027)**: #3 (7.3.1), #2 (7.2.11,
+  now on `kernel-7.2`).
+- **7.3.1 `plus3` on `main`**: #9, the 7.3 line with `main` merged in
+  (apple-ave 0.99.6). 7.2.11 `plus5`'s 0004 is not carried: the 7.3.1
+  Asahi base has that fix.
+- **The 7.2.11 line on `kernel-7.2`** (`plus5`): #7.
+- **apple-ave 0.99.6**: #4 (`main` before the move), #8 (`kernel-7.3`).
+- **The mirror tag** `plus/asahi-wip-7.3.1-c2e6784b008c` in
   [aquarat/linux](https://github.com/aquarat/linux).
+- **CI compile job**: #10, and #13 (patched files in subdirectories
+  without their own Makefile are built through their parent's Makefile).
+- **dkms-apple-avd 7.3.1.2**: #12. Rebased onto 7.3.1 `plus3`; 0005 keeps
+  the codec list of older firmware with the legacy `CODECS:` trailer and
+  assumes the SoC's list only when the firmware has neither (review on
+  #9). Compiles against 7.3.1 and 7.2.11 headers.
 
 ## Still to test on hardware (7.3.1)
 
@@ -141,7 +153,10 @@ builds SRPMs. The `kernel-build` workflow adds a compile check
 change the kernel or the module packages:
 
 - the SRPM's prepared tree with its 16k config, `make prepare`;
-- the directories of every C/Rust file the kernel patches touch;
+- the Kbuild directory that builds each C/Rust file the kernel patches
+  touch (the nearest directory with a Makefile or Kbuild: atlantic's
+  `hw_atl/` objects are built by `atlantic/`), and a check that every
+  touched C file became an object;
 - the Apple device trees, when a patch touches one;
 - `apple-avd` and `apple-ave` built against that tree, as DKMS builds
   them.

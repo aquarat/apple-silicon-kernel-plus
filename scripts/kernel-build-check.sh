@@ -1,7 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 # Compile what this project changes in the kernel, without a full build:
-# the directories of every C/Rust file the kernel patches touch, the Apple
+# the Kbuild directory that builds each C/Rust file the kernel patches
+# touch (and a check that each touched C file became an object), the Apple
 # device trees when a patch touches one, and the DKMS modules (apple-avd,
 # apple-ave) against the same tree.
 #
@@ -16,9 +17,34 @@
 #
 #   JOBS=N      make -j (default: nproc)
 #   WORK=DIR    scratch directory (default: a new one under ${TMPDIR:-/tmp})
+#
+#   scripts/kernel-build-check.sh --owning-dirs TREE FILE...
+#       prints the Kbuild directory that builds each FILE (for the tests)
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
+
+# The directory whose Makefile (or Kbuild) builds a source file: its own
+# directory if that has one, else the nearest parent that does. Objects in
+# a subdirectory without a Makefile belong to the parent's list (atlantic's
+# hw_atl/hw_atl_b0.o is in atlantic/Makefile's atlantic-objs), and
+# `make <dir without Makefile>/` builds nothing and still succeeds.
+owning_dir() {
+    local tree=$1 d
+    d=$(dirname "$2")
+    while [ "$d" != . ] && [ ! -f "$tree/$d/Makefile" ] && [ ! -f "$tree/$d/Kbuild" ]; do
+        d=$(dirname "$d")
+    done
+    [ "$d" != . ] || { echo "kernel-build-check: no Makefile above $2" >&2; return 1; }
+    echo "$d"
+}
+
+if [ "${1:-}" = --owning-dirs ]; then
+    tree=${2:?usage: $0 --owning-dirs TREE FILE...}; shift 2
+    for f in "$@"; do owning_dir "$tree" "$f"; done
+    exit 0
+fi
+
 srpm=$(realpath "${1:?usage: $0 <kernel SRPM>}")
 JOBS=${JOBS:-$(nproc)}
 WORK=${WORK:-$(mktemp -d "${TMPDIR:-/tmp}/kernel-build-check.XXXXXX")}
@@ -45,13 +71,27 @@ cp "$config" .config
 make -s olddefconfig
 make -s -j"$JOBS" prepare
 
-# Directories of the C and Rust files the patches add or change.
-mapfile -t dirs < <(sed -n 's|^+++ b/||p' "$HERE"/packages/kernel/patches/*.patch |
-    grep -E '\.(c|rs)$' | xargs -r -n1 dirname | sort -u)
+# The C and Rust files the patches add or change, and the Kbuild
+# directories that build them.
+mapfile -t files < <(sed -n 's|^+++ b/||p' "$HERE"/packages/kernel/patches/*.patch |
+    grep -E '\.(c|rs)$' | sort -u)
+mapfile -t dirs < <(for f in "${files[@]}"; do owning_dir "$tree" "$f"; done | sort -u)
 for d in "${dirs[@]}"; do
     log "make $d/"
     make -j"$JOBS" "$d/"
 done
+# Every touched C file must have become an object; a directory target that
+# builds nothing (wrong directory, option off in the config) fails here.
+# Rust objects are per crate, not per file, so .rs files are not checked.
+missing=()
+for f in "${files[@]}"; do
+    case $f in *.c) [ -f "${f%.c}.o" ] || missing+=("${f%.c}.o") ;; esac
+done
+if [ ${#missing[@]} -gt 0 ]; then
+    printf 'kernel-build-check: not built: %s\n' "${missing[@]}" >&2
+    exit 1
+fi
+log "${#files[@]} patched source files compiled"
 
 # Apple device trees, when a patch touches one.
 if sed -n 's|^+++ b/||p' "$HERE"/packages/kernel/patches/*.patch |

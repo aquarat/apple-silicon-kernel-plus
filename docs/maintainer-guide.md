@@ -37,7 +37,8 @@ LINT=1 scripts/build-srpms.sh apple-ave        # rpmlint the SRPM
 `scripts/kernel-build-check.sh out/kernel-*.src.rpm` (in the tools
 container, or on a Fedora aarch64 machine with the kernel's build tools
 and `dtc`) prepares that SRPM's tree with its 16k config and compiles the
-directories of every C/Rust file the patches touch, the Apple device
+Kbuild directories that build every C/Rust file the patches touch
+(and checks each touched C file became an object), the Apple device
 trees if a patch touches one, and `apple-avd` and `apple-ave` as DKMS
 would. The `kernel-build` workflow runs it on changes to the kernel or the
 module packages. It is a compile check, not a full build.
