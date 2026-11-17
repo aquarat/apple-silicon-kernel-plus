@@ -59,24 +59,39 @@ APCIEC as modules), apple-avd 0001-0004/0005, apple-ave 0.99.5.
    branch `kernel-7.2` (7.2.11 `plus5`: #2, retargeted there as #7).
 2. **Merge order** #3, then #6, then the move of `main` to 7.3.1 (#9).
 3. **GEM PRIME-import backport to 7.2: skipped.** 7.3.1 has the fix.
-4. **AVD stays DKMS.** On 7.3.1 it is `dkms-apple-avd` 7.3.1.1 (the
-   7.2.15/7.3.1 driver plus 0005), built for 7.2 and 7.3 kernels, so a 7.2
-   kernel kept for rollback keeps the patched decoder. No in-tree AVD
-   patches for now.
+4. **AVD stays DKMS.** No in-tree AVD patches for now.
 5. **PMP device trees stay out** of this project.
-6. **CI compile job: added** (see CI).
+6. **CI compile job** (see CI).
 7. **VRR experiments stay out.**
 
-## Done
+## Status
 
-- **7.3: the independent PAuth patch** (#6, 7.3.1 `plus3`): `main`'s
-  0001 rebased to 7.3.1 by context only (two hunks, no code change), and
-  `main` merged into the 7.3 line.
-- **7.3.1 on `main`** (#9): the 7.3 line with `main` merged in (apple-ave
-  0.99.6). 7.2.11 `plus5`'s 0004 is not carried: the 7.3.1 Asahi base has
-  that fix.
-- The mirror tag `plus/asahi-wip-7.3.1-c2e6784b008c` is in
+Done, on `main` unless stated:
+
+- **7.3: the independent PAuth patch**: #6 (into `kernel-7.3`), on `main`
+  through #9. `main`'s 0001 rebased to 7.3.1 by context only (two hunks,
+  no code change).
+- **thunderbolt-net TSO for a lowered MSS (0027)**: #3 (7.3.1), #2 (7.2.11,
+  now on `kernel-7.2`).
+- **7.3.1 `plus3` on `main`**: #9, the 7.3 line with `main` merged in
+  (apple-ave 0.99.6). 7.2.11 `plus5`'s 0004 is not carried: the 7.3.1
+  Asahi base has that fix.
+- **The 7.2.11 line on `kernel-7.2`** (`plus5`): #7.
+- **apple-ave 0.99.6**: #4 (`main` before the move), #8 (`kernel-7.3`).
+- **The mirror tag** `plus/asahi-wip-7.3.1-c2e6784b008c` in
   [aquarat/linux](https://github.com/aquarat/linux).
+- **CI compile job**: #10, with the fix for patched files in
+  subdirectories without their own Makefile in the follow-up PR that
+  also brings this status section.
+
+Pending:
+
+- **dkms-apple-avd on 7.3.1**: `main` packages 7.3.1.1 (the 7.2.15/7.3.1
+  driver plus 0005, `BUILD_EXCLUSIVE_KERNEL` for 7.2 and 7.3 kernels),
+  carried over from the 7.3 line, but its DKMS builds against the 7.3.1
+  `plus3` kernel and a 7.2 kernel are not yet checked (in progress). Also
+  open: whether 0005's fallback should keep honouring the codec list of
+  older firmware that has the legacy `CODECS:` trailer (review on #9).
 
 ## Still to test on hardware (7.3.1)
 
@@ -141,7 +156,10 @@ builds SRPMs. The `kernel-build` workflow adds a compile check
 change the kernel or the module packages:
 
 - the SRPM's prepared tree with its 16k config, `make prepare`;
-- the directories of every C/Rust file the kernel patches touch;
+- the Kbuild directory that builds each C/Rust file the kernel patches
+  touch (the nearest directory with a Makefile or Kbuild: atlantic's
+  `hw_atl/` objects are built by `atlantic/`), and a check that every
+  touched C file became an object;
 - the Apple device trees, when a patch touches one;
 - `apple-avd` and `apple-ave` built against that tree, as DKMS builds
   them.

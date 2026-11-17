@@ -15,6 +15,7 @@ on:
       - 'scripts/make-srpm.sh'
       - 'scripts/kernel-configs.py'
       - 'scripts/kernel-build-check.sh'
+      - 'tests/kernel-build-check/**'
       - 'container/install-tools.sh'
       - '.github/workflows/kernel-build.yml'
   pull_request:
@@ -25,6 +26,7 @@ on:
       - 'scripts/make-srpm.sh'
       - 'scripts/kernel-configs.py'
       - 'scripts/kernel-build-check.sh'
+      - 'tests/kernel-build-check/**'
       - 'container/install-tools.sh'
       - '.github/workflows/kernel-build.yml'
   workflow_dispatch:
