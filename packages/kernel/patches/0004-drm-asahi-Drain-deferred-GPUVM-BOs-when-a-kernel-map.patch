@@ -1,0 +1,57 @@
+From ae06a62e7530ee90218ab8f63933f46ea4785031 Mon Sep 17 00:00:00 2001
+From: aquarat <3090997+aquarat@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 15:11:15 +0000
+Subject: [PATCH] drm/asahi: Drain deferred GPUVM BOs when a kernel mapping is
+ dropped
+
+KernelMappingInner holds a GpuVmBo reference, which is released with
+drm_gpuvm_bo_put_deferred(): the last put only moves the vm_bo to the
+GPUVM's deferred list, and the vm_bo, its GEM reference and its pages
+are freed only when someone calls drm_gpuvm_bo_deferred_cleanup() on
+that GPUVM. User VMs do that when they are torn down, but kernel
+mappings live in the device's kernel VM, which is never torn down. So
+every BO that was ever mapped into the kernel VM stays allocated after
+its last user is gone. Userspace timestamp buffers are mapped there:
+each process that loads a model with llama.cpp's Vulkan backend left
+about 239 MB of unevictable shmem behind after a clean exit, with no
+GPU faults, and 3.8 GB had accumulated on one machine.
+
+Drop the GpuVmBo explicitly and drain the owner's deferred list when a
+KernelMappingInner is dropped. Field order is unchanged, so the GEM
+reference and then the owning GPUVM are released after the cleanup, as
+the comment on the struct requires. KernelMapping::drop releases its
+exec lock before the mapping's node (and with it this data) is dropped.
+
+This is the KernelMappingInner part of upstream asahi-wip commit
+256b1204c12d ("drm/asahi: Adjustment for v7.2 + partial drm-rust v7.3",
+Janne Grunau), which also reorders the fields; the asahi-wip commit this
+kernel is based on (e09c62843a8e) predates it. Not needed from 7.3.1
+(c2e6784b008c has it).
+
+Assisted-by: Claude:claude-opus-5-5
+Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
+---
+ drivers/gpu/drm/asahi/mmu.rs | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/drivers/gpu/drm/asahi/mmu.rs b/drivers/gpu/drm/asahi/mmu.rs
+index b09509832..9291f43eb 100644
+--- a/drivers/gpu/drm/asahi/mmu.rs
++++ b/drivers/gpu/drm/asahi/mmu.rs
+@@ -631,6 +631,13 @@ pub(crate) struct KernelMappingInner {
+     mapped_size: usize,
+ }
+ 
++impl Drop for KernelMappingInner {
++    fn drop(&mut self) {
++        self.bo = None;
++        self.owner.deferred_cleanup();
++    }
++}
++
+ /// An object mapping into a [`Vm`], which reserves the address range from use by other mappings.
+ pub(crate) struct KernelMapping(mm::Node<(), KernelMappingInner>);
+ 
+-- 
+2.56.0
+

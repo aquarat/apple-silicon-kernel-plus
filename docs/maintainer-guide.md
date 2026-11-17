@@ -73,8 +73,9 @@ that `asahi-wip` (or kernel.org, or `@asahi`) moved. To move:
    ```
 
    (Remove the old patch files first; keep their names.) Keep the headers:
-   `From: Anees Iqbal`, `Origin:` and the rebase note on 0001 (no
-   sign-off unless he gives one), `Signed-off-by:` on 0002 and 0003. Check
+   `Signed-off-by:` on 0001, 0002 and 0003, and 0001's credit paragraph.
+   0001 is a clean-room implementation (docs/kvm-pauth-provenance.md):
+   rebase it from its own history, never from the pre-`plus4` patch. Check
    that `emulate_nisv_ldst` still defaults to on. If upstream fixed the
    atlantic problem (0003), drop the patch.
 5. `PREP_CHECK=1 scripts/build-srpms.sh kernel` (or `scripts/make-srpm.sh`
@@ -209,6 +210,15 @@ When Fedora updates `mesa-vulkan-drivers` for the target release:
 3. Rebuild; patches that no longer apply need a rebase (upstream may have
    merged them: drop those).
 
+## Bumping mesa-coopmat
+
+It follows the `coopmat` branch of github.com/aquarat/mesa, by hand; the
+steps are in packages/mesa-coopmat/README.md ("Version drift"):
+`mesa_commit`, `mesa_tree`, `mesa_date`, `mesa_version`, `mesa_base` and
+`Version` in the spec, `Release: 1`, changelog. `make-srpm.sh` refuses a
+commit whose tree or `VERSION` does not match. Each pin gets its own
+directory under `/usr/lib64/apple-silicon-kernel-plus/mesa-coopmat/`.
+
 ## Bumping Reims / QEMU
 
 The two are separate packages, built from separate repositories:
@@ -240,7 +250,7 @@ pair (`GPU_BACKEND_BIN`, see packages/qemu-vmapple/README.md).
 ## COPR
 
 `scripts/copr-setup.sh` (once) creates the project with the
-`fedora-44-aarch64` chroot and seven SCM packages using the `make_srpm`
+`fedora-44-aarch64` chroot and eight SCM packages using the `make_srpm`
 method. The SRPM step has network access in COPR; the RPM builds do not
 need it, so "enable internet" stays off.
 

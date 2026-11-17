@@ -1,0 +1,25 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Run one command with the mesa-coopmat Vulkan driver (Honeykrisp with
+# VK_KHR_cooperative_matrix) instead of the system Mesa:
+#
+#   with-coopmat <command> [args...]
+#   with-coopmat            print the environment it sets (KEY=value lines,
+#                           usable as a systemd EnvironmentFile)
+#
+# Only the started process and its children see the driver. Nothing else on
+# the machine changes. The driver library is named by an absolute path in the
+# ICD file, so LD_LIBRARY_PATH is not needed.
+ICD=@ICD@
+if [ ! -r "$ICD" ]; then
+    echo "with-coopmat: $ICD is missing (is mesa-coopmat installed?)" >&2
+    exit 127
+fi
+if [ $# -eq 0 ]; then
+    echo "VK_DRIVER_FILES=$ICD"
+    echo "VK_ICD_FILENAMES=$ICD"
+    exit 0
+fi
+# VK_DRIVER_FILES is the current loader variable; VK_ICD_FILENAMES is its
+# older name, still read by older loaders and checked by some programs.
+VK_DRIVER_FILES=$ICD VK_ICD_FILENAMES=$ICD exec "$@"

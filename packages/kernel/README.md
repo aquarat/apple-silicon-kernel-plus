@@ -64,12 +64,14 @@ commit (docs/maintainer-guide.md).
 
 | patch | what | default |
 |---|---|---|
-| 0001 | KVM: save, restore and expose Apple's PAuth virtualization state (VM key, APSTS, APCTL, KERNKEYLO/HI). Needed by macOS guests on QEMU's `vmapple` machine. Only acts on Apple CPUs with ACTLR virtualization (M1, M2), and only for guests | always on |
+| 0001 | KVM: handle Apple's PAuth virtualization state (a random VM key per VM, APSTS, and per-vCPU APCTL, KERNKEYLO/HI exposed to user space). Needed by macOS guests on QEMU's `vmapple` machine. Only acts on M1 and M2 CPUs, under VHE on bare metal | always on |
 | 0002 | KVM: decode and emulate MMIO loads/stores that fault without an instruction syndrome (XNU's pre-indexed store to the GIC) | **on**; `kvm.emulate_nisv_ldst=0` turns it off |
 | 0003 | atlantic: keep the station MAC unicast filter enabled on AQC113 (ATL2). 7.2's ATL2 filter rework drops unicast frames to the interface's own address when the firmware's filter base index is above the multicast list length (the Mac Studio's built-in 10GbE: unicast RX dead unless promiscuous) | fix |
+| 0004 | drm/asahi: free BOs that were mapped into the GPU's kernel VM once their mapping is dropped (drain GPUVM's deferred list). Userspace timestamp buffers are mapped there, so every Vulkan process that used them leaked its buffers as unevictable memory (about 239 MB per llama.cpp model load). The relevant part of Asahi's 256b1204c12d, which later asahi-wip commits (7.3.1's base) have | fix |
 
-0001 is a rebase of work by Anees Iqbal (see `CREDITS.md`). 0002 and 0003
-are this project's own work. All three are in `git format-patch` form
+0001, 0002 and 0003 are this project's own work; 0004 is a backport from asahi-wip. 0001 is an independent
+implementation of what Anees Iqbal first showed macOS guests need (see
+`CREDITS.md` and `docs/kvm-pauth-provenance.md`). All four are in `git format-patch` form
 against the tarball plus `patch-7.2-redhat.patch`; docs/maintainer-guide.md
 shows how to rebase them.
 
@@ -101,9 +103,9 @@ that repository (its `scripts/make-patches.sh` regenerates it for a new
 base) and bump the release as `Kernel release naming` says. Known issues and
 limits are in that repository's README.
 
-### Thunderbolt networking (thunderbolt-net), patches 0020-0026
+### Thunderbolt networking (thunderbolt-net), patches 0020-0027
 
-`patches/tb-net/` of the same repository (commit a71c646), for IP over a
+`patches/tb-net/` of the same repository (commit 1648a11), for IP over a
 USB4/Thunderbolt cable between two Macs (or a Mac and another host):
 
 - 0020, 0021: end-to-end flow control on the transmit ring too, for the
@@ -123,6 +125,13 @@ USB4/Thunderbolt cable between two Macs (or a Mac and another host):
   a normal-MTU interface (before, a Mac bridged to a LAN through another
   Mac crawled at about 1 Mbit/s unless TSO was off on it; not
   Apple-specific).
+- 0027: the receiver in 0026 cuts a forwarded TSO packet at its own MTU,
+  because ThunderboltIP does not carry the segment size. When path MTU
+  discovery or an MSS clamp lowered the sender's MSS (a tunnel or overlay
+  network behind the bridging Mac), those segments are too large for the
+  smaller hop and TCP crawled at under 1 MB/s. The sender now keeps TSO only
+  for full-sized segments and segments the rest in software (from `plus5`;
+  every sender needs it; not Apple-specific).
 
 Measured Mac Studio M1 Max to MacBook Pro M1 Max: 21 Gb/s single stream,
 14-15 Gb/s each way bidirectional, at MTU 1500 or 65522, no lost frames.

@@ -6,16 +6,37 @@ project's kernel adds both, in `packages/kernel/patches/`.
 
 ## 0001: Apple PAuth virtualization state (always on)
 
-On entry to a guest, KVM programs Apple's VM key (APVMKEYLO/HI_EL2) and
-APSTS, and saves and restores APCTL, KERNKEYLO and KERNKEYHI through their
-EL12 aliases. QEMU reads and writes them through the one-register ABI.
+macOS on `vmapple` manages its pointer-authentication keys through vendor
+hypercalls, which QEMU serves by writing the guest's key registers with
+`KVM_SET_ONE_REG`. KVM already handles the architectural keys; 0001 adds
+Apple's:
+
+- APCTL, KERNKEYLO and KERNKEYHI are per-vCPU state (reset to 0). While a
+  vCPU is loaded they live in the CPU, written and read through their EL12
+  aliases. QEMU reaches them as `ARM64_SYS_REG(3, 6, 15, 15, 0)` and
+  `ARM64_SYS_REG(3, 6, 15, 2, 3/4)`, which `KVM_GET_REG_LIST` lists.
+- Each VM gets a random 128-bit VM key when it is created. Every vCPU load
+  writes it to APVMKEYLO/HI_EL2 and sets APSTS_EL12 to 1. The key is never
+  visible to the guest or to user space, and is cleared when the VM is
+  destroyed.
+- A guest access to any of these registers gets UNDEF.
+
 Without it macOS stops in launchd as soon as it uses signed pointers.
 
-It only acts on CPUs with Apple's ACTLR virtualization capability (M1:
-`ARM64_HAS_ACTLR_VIRT_APPLE`, M2: `ARM64_HAS_ACTLR_VIRT`), and only for
-guests. The host's own PAuth state is not touched.
+It only acts on M1 and M2 CPUs (matched by MIDR: m1n1's list of parts whose
+Apple system registers are unlocked), with KVM in VHE mode on bare metal.
+In nVHE, hVHE and protected mode, under a nested hypervisor, and on other
+CPUs, KVM is unchanged. `dmesg` shows `kvm [1]: Apple PAuth virtualization
+state enabled` when it is active.
 
-Origin: a rebase of Anees Iqbal's Linux 6.19 patch (CREDITS.md).
+On M1 Max the VM key only changes signatures made with keys the guest
+writes itself in Apple mode (APCTL bit 0). Keys set through KVM, which is
+how QEMU serves macOS's hypercalls, sign the same in every VM, and a
+macOS 26 guest migrated to a file resumed in a new QEMU process.
+
+Origin: this project's independent implementation
+([kvm-pauth-provenance.md](kvm-pauth-provenance.md)). Anees Iqbal first
+showed that macOS guests need this state (CREDITS.md).
 
 ## 0002: MMIO loads/stores without a syndrome (on by default)
 
@@ -55,7 +76,7 @@ retired; its last version is empty (packages/qemu-vmapple/README.md). On a
 ```sh
 uname -r                                           # ...asahiwip.plus<N>.fc44.aarch64+16k
 cat /sys/module/kvm/parameters/emulate_nisv_ldst   # Y for macOS guests
-dmesg | grep -E "ACTLR virtualization|VHE mode"
+dmesg | grep -E "PAuth virtualization|VHE mode"
 ```
 
 ## Userspace

@@ -13,8 +13,8 @@
 #
 # The SRPM carries every source (scripts/make-srpm.sh): QEMU with the meson
 # subprojects it needs. The build needs no network.
-%global qemu_commit  c6d87a8406ecd228fa917b7ceaba9dc89980f3af
-%global qemu_date    20261018
+%global qemu_commit  acde6ba44f942b39e17a68224e53cbc9918e28c4
+%global qemu_date    20261110
 %global qemu_short   %(c=%{qemu_commit}; echo ${c:0:12})
 %global qemu_version 11.1.50
 # apv-gpu-proxy protocol version (APV_PROXY_VERSION in the protocol header;
@@ -150,6 +150,12 @@ if ldd $q | grep -i vulkan; then exit 1; fi
 %license %{name}-%{version}-extra/LICENSE
 
 %changelog
+* Tue Nov 10 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 11.1.50^20261110gitacde6ba-1
+- aquarat/qemu-reims-vgpu acde6ba: virtio-pci x-ascending-capabilities
+  (default off) links each virtio device's capability list in address
+  order, which macOS 27 guests reportedly need; -global
+  virtio-pci.x-ascending-capabilities=on turns it on. macOS 27 untested.
+
 * Tue Oct 20 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 11.1.50^20261018gitc6d87a8-1
 - Reims out of process: QEMU is now aquarat/qemu-reims-vgpu c6d87a8 built
   on its own, with the apv-gpu-proxy device (gfx-device=apv-gpu-proxy); the
