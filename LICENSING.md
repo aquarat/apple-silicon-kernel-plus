@@ -174,11 +174,16 @@ an interface fact, are in the AVE repository's
 [docs/00-methodology.md](https://github.com/aquarat/apple-m-series-ave-driver/blob/main/docs/00-methodology.md)
 and
 [docs/100-no-apple-data.md](https://github.com/aquarat/apple-m-series-ave-driver/blob/main/docs/100-no-apple-data.md).
-That inventory lists one item as less clear-cut: about fifty individual
+That inventory once listed one item as unclear: about fifty individual
 protocol field values that a macOS 13.5 encoding session sends
 (`ave_macos_*_13_5` in `ave_abi.h`), applied only when the
-`session_macos` module parameter asks for them (off by default). The
-clock's register layout is described in the header of `avp-rtc.c`; Reims'
+`session_macos` module parameter asks for them (off by default). This
+project's position is that they are interface facts and stay in the
+driver: each is a separately named setting of one field of the
+firmware's command format (a flag, a count, an "auto" or fill value),
+which a driver must be able to send to configure the encoder the way
+macOS does, not a table or block of Apple data copied whole. The clock's
+register layout is described in the header of `avp-rtc.c`; Reims'
 approach is in its `crates/reims-vgpu-wire/README.md`.
 
 This is not how Asahi Linux works. Asahi Linux's
