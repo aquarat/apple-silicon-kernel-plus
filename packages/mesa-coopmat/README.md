@@ -8,9 +8,9 @@ asked to.
 
 | path | what |
 |---|---|
-| `/usr/lib64/apple-silicon-kernel-plus/mesa-coopmat/26.3.0-devel-71969e371aea/lib/libvulkan_asahi.so` | the driver |
-| `.../26.3.0-devel-71969e371aea/share/vulkan/icd.d/asahi_icd.aarch64.json` | its ICD file, outside `/usr/share/vulkan/icd.d` |
-| `.../26.3.0-devel-71969e371aea/PROVENANCE` | source commit, tree, upstream base, driver SHA256 |
+| `/usr/lib64/apple-silicon-kernel-plus/mesa-coopmat/26.3.0-devel-20e478a1ab11/lib/libvulkan_asahi.so` | the driver |
+| `.../26.3.0-devel-20e478a1ab11/share/vulkan/icd.d/asahi_icd.aarch64.json` | its ICD file, outside `/usr/share/vulkan/icd.d` |
+| `.../26.3.0-devel-20e478a1ab11/PROVENANCE` | source commit, tree, upstream base, driver SHA256 |
 | `/usr/lib64/apple-silicon-kernel-plus/mesa-coopmat/bin/with-coopmat` | runs a command with this driver |
 
 The versioned directory changes with each source pin; the wrapper path
@@ -44,10 +44,10 @@ github.com/aquarat/mesa, branch `coopmat`, pinned in the spec:
 
 | | |
 |---|---|
-| commit | `71969e371aeab8bc8fdcaa970d08230d52a9442e` (2026-09-06) |
-| tree | `b2dd2c16cf1ddc94bc573ff05aee9335de22f17a` |
+| commit | `20e478a1ab11f06d388c29fdbffbab85f349ccdd` (2026-11-17) |
+| tree | `515e3eeabb5e013d5cd74a438b5ced319321331a` |
 | upstream base | Mesa main `063a4640270ba4e1cf9ca7e916fcc090ab24c3a4` (2026-08-26, `26.3.0-devel`) |
-| on top | 39 commits: Honeykrisp compute overlap, GPU timing/profiling (`HK_PERFTEST`), scratch and spill fixes, tessellation, `VK_EXT_fragment_shader_interlock`; then `d105715` (review fixes), `77e6f99` (prototype `VK_KHR_cooperative_matrix` on the SIMD-group matrix FMA), `7dd673b` (native mixed f16 x f16 + f32 FMA), `71969e3` (register allocation fix for `simd_matrix_fmadd`) |
+| on top | 39 commits: Honeykrisp compute overlap, GPU timing/profiling (`HK_PERFTEST`), scratch and spill fixes, tessellation, `VK_EXT_fragment_shader_interlock`; then `d105715` (review fixes), `77e6f99` (prototype `VK_KHR_cooperative_matrix` on the SIMD-group matrix FMA), `7dd673b` (native mixed f16 x f16 + f32 FMA), `71969e3` (register allocation fix for `simd_matrix_fmadd`); then 3 AGX compiler fixes cherry-picked (`-x`) from later Mesa main, all three backported upstream to mesa-26.2.7 (`bbeb2dca` already in 26.2.6): `bebbaf49` (phi register shuffling order, MR 44475), `bbeb2dca` (mask the shift count of `bitfield_extract` and the fused shift ops, MR 44700), `b47973d0` (signext optimisation with `abs`, MR 45571) |
 
 `scripts/make-srpm.sh mesa-coopmat` fetches only that commit (shallow) and
 refuses it unless its tree id and `VERSION` match the spec, so the SRPM's
@@ -96,6 +96,15 @@ that all pass with the system Mesa:
 - `FLASH_ATTN_EXT` with a `q5_0`/`q5_1` K/V cache (674 cases);
 - `GET_ROWS` on `iq3_s` (8 cases).
 
-So do not use a q5 KV cache (`-ctk`/`-ctv q5_0`/`q5_1`) or IQ3_S models
-with this driver. Everything else in that run passes, including F16/F32/q4/q8
-K/V flash attention and all `MUL_MAT_ID` types.
+Everything else in that run passes, including F16/F32/q4/q8 K/V flash
+attention and all `MUL_MAT_ID` types. So do not use a q5 KV cache
+(`-ctk`/`-ctv q5_0`/`q5_1`) or IQ3_S models with this driver until a release
+says otherwise.
+
+Those results are for the first pin, `71969e3`. Both failing groups unpack
+bit fields at variable offsets, and the system Mesa 26.2.6 has upstream
+`bbeb2dca` (AGX shifts do not mask the shift count, so NIR's
+`bitfield_extract` and fused-shift patterns could read the wrong bits) while
+`71969e3`'s base predates it. The pin `20e478a1ab11` adds that fix and two
+other compiler fixes. It is expected to clear these failures but has not been
+run on a GPU yet: rerun the sweep before relying on q5 KV or IQ3_S.

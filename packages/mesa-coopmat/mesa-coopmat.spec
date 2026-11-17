@@ -12,11 +12,12 @@
 # Source: github.com/aquarat/mesa, branch coopmat, pinned to mesa_commit.
 # make-srpm.sh fetches exactly that commit and refuses it unless its tree is
 # mesa_tree and its VERSION file is mesa_version. It is upstream Mesa main
-# 063a4640270b (26.3.0-devel) plus 39 commits of this project; it is not
+# 063a4640270b (26.3.0-devel) plus 39 commits of this project and 3 upstream
+# AGX compiler fixes cherry-picked from later Mesa main; it is not
 # Fedora's Mesa version (README.md, "Version drift").
-%global mesa_commit  71969e371aeab8bc8fdcaa970d08230d52a9442e
-%global mesa_tree    b2dd2c16cf1ddc94bc573ff05aee9335de22f17a
-%global mesa_date    20260906
+%global mesa_commit  20e478a1ab11f06d388c29fdbffbab85f349ccdd
+%global mesa_tree    515e3eeabb5e013d5cd74a438b5ced319321331a
+%global mesa_date    20261117
 %global mesa_version 26.3.0-devel
 %global mesa_base    063a4640270ba4e1cf9ca7e916fcc090ab24c3a4
 %global mesa_short   %(c=%{mesa_commit}; echo ${c:0:12})
@@ -76,7 +77,8 @@ Requires:       vulkan-loader
 Mesa's Vulkan driver for Apple M1/M2 GPUs (Honeykrisp) from the coopmat
 branch of github.com/aquarat/mesa (commit %{mesa_short}): Mesa main of
 2026-08-26 (%{mesa_version}) with this project's Honeykrisp compute and
-profiling changes and VK_KHR_cooperative_matrix, which ggml's Vulkan backend
+profiling changes, VK_KHR_cooperative_matrix and three later upstream AGX
+compiler fixes, which ggml's Vulkan backend
 uses for matrix multiplication and flash attention.
 
 It is installed in its own versioned directory under
@@ -149,6 +151,14 @@ echo "driver:   lib/libvulkan_asahi.so sha256 $(sha256sum %{buildroot}%{coopmat_
 %{coopmat_prefix}/share/
 
 %changelog
+* Tue Nov 17 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 26.3.0~devel^20261117git20e478a-1
+- aquarat/mesa coopmat 20e478a1ab11: 71969e371aea plus three AGX compiler
+  fixes cherry-picked from Mesa main, all backported upstream to mesa-26.2.7:
+  bbeb2dca (mask the shift count of bitfield_extract and the fused shift
+  ops, MR 44700; the likely cause of the q5_0/q5_1 KV flash-attention and
+  iq3_s GET_ROWS failures), bebbaf49 (phi register shuffling order, MR 44475)
+  and b47973d0 (signext optimisation with abs, MR 45571)
+
 * Tue Nov 17 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 26.3.0~devel^20260906git71969e3-1
 - First release: aquarat/mesa coopmat 71969e371aea (Mesa main 063a4640270b +
   39 commits). Opt-in per process through with-coopmat; the system Mesa stays
