@@ -63,6 +63,15 @@ of response times.
   not change.
 - Patches that upstream Mesa merges are dropped.
 
+## mesa-coopmat
+
+- Tracks the `coopmat` branch of `aquarat/mesa` (a Mesa main snapshot with
+  cooperative matrices), by hand, pinned to one commit. It does not follow
+  Fedora's Mesa version.
+- Each pin installs into its own versioned directory; programs that name the
+  versioned ICD file directly stop finding a GPU after an update instead of
+  silently changing driver. `with-coopmat` always points at the installed pin.
+
 ## qemu-vmapple and reims-vgpu-backend
 
 - qemu-vmapple tracks `aquarat/qemu-reims-vgpu` `master`, and

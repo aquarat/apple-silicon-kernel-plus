@@ -18,13 +18,18 @@ This project packages and patches other people's work.
   and Fedora's kernel patch, used from Fedora's kernel SRPM.
 - **Anees Iqbal** ([steelbrain](https://github.com/steelbrain)): the work in
   [steelbrain/experiment-macOS-arm64-on-asahi-linux-arm64](https://github.com/steelbrain/experiment-macOS-arm64-on-asahi-linux-arm64)
-  that first ran macOS guests under KVM on Asahi Linux, including the Linux
-  6.19 patch for Apple's PAuth virtualization state. Kernel patch 0001 is a
-  rebase of that patch onto the Fedora Asahi 7.1 kernel and then onto
-  Linux 7.2; the code changes are his. The patch names him as its author
-  (`From:`) and names its origin.
-- Kernel patches 0002 (no-syndrome MMIO emulation) and 0003 (atlantic
-  AQC113 unicast filter fix) are this project's work.
+  that first ran macOS guests under KVM on Asahi Linux, and first showed
+  that they need Apple's PAuth virtualization state. Kernel releases up to
+  `plus3` carried a rebase of his Linux 6.19 patch for it as 0001. From
+  `plus4`, 0001 is an independent implementation
+  ([docs/kvm-pauth-provenance.md](docs/kvm-pauth-provenance.md)); its
+  commit message credits his discovery.
+- **The m1n1 developers** ([AsahiLinux/m1n1](https://github.com/AsahiLinux/m1n1)):
+  the register definitions and hypervisor setup of Apple's PAuth
+  virtualization registers that kernel patch 0001 is written from.
+- Kernel patches 0001 (Apple PAuth virtualization state), 0002
+  (no-syndrome MMIO emulation) and 0003 (atlantic AQC113 unicast filter
+  fix) are this project's work.
 
 ## apple-avd
 
@@ -57,6 +62,10 @@ The Mesa developers, in particular the authors of the Asahi Vulkan driver
   [aquarat/qemu-reims-vgpu](https://github.com/aquarat/qemu-reims-vgpu) and
   [aquarat/metal2vulkan](https://github.com/aquarat/metal2vulkan), which add
   what an Asahi Linux host needs.
+- Izzy Mansurov (sapoepsilon, [omvm](https://github.com/sapoepsilon/omvm))
+  found that Reims' 256-byte linear-texture alignment crashes the guest's
+  icon service
+  ([aquarat/apple-macos-arm64-vm-guest#1](https://github.com/aquarat/apple-macos-arm64-vm-guest/issues/1)).
 - The authors of the Rust crates vendored into the reims-vgpu-backend
   SRPM; each crate's licence file names them.
 

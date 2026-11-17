@@ -64,15 +64,17 @@ commit (docs/maintainer-guide.md).
 
 | patch | what | default |
 |---|---|---|
-| 0001 | KVM: save, restore and expose Apple's PAuth virtualization state (VM key, APSTS, APCTL, KERNKEYLO/HI). Needed by macOS guests on QEMU's `vmapple` machine. Only acts on Apple CPUs with ACTLR virtualization (M1, M2), and only for guests | always on |
+| 0001 | KVM: handle Apple's PAuth virtualization state (a random VM key per VM, APSTS, and per-vCPU APCTL, KERNKEYLO/HI exposed to user space). Needed by macOS guests on QEMU's `vmapple` machine. Only acts on M1 and M2 CPUs, under VHE on bare metal | always on |
 | 0002 | KVM: decode and emulate MMIO loads/stores that fault without an instruction syndrome (XNU's pre-indexed store to the GIC) | **on**; `kvm.emulate_nisv_ldst=0` turns it off |
 | 0003 | atlantic: enable the AQC113 (ATL2) unicast/multicast list filters relative to the firmware's filter base index. Asahi's own fix keeps the station MAC filter on (unicast RX on the Mac Studio's built-in 10GbE), but still switches list entries off unless the list is longer than the base index, so multicast is lost unless the port is promiscuous | fix |
 
-0001 is a rebase of work by Anees Iqbal (see `CREDITS.md`). 0002 and 0003
-are this project's own work. Up to 7.2.11, 0003 was a larger patch that
-also kept the station MAC filter on; Asahi's tree does that itself now. All
-three are in `git format-patch` form against the tarball plus
-`patch-7.3-redhat.patch`; docs/maintainer-guide.md
+0001, 0002 and 0003 are this project's own work. 0001 is an independent
+implementation of what Anees Iqbal first showed macOS guests need (see
+`CREDITS.md` and `docs/kvm-pauth-provenance.md`); on 7.3.1 it is the
+7.2.11 `plus4` patch with its context rebased. Up to 7.2.11, 0003 was a
+larger patch that also kept the station MAC filter on; Asahi's tree does
+that itself now. All three are in `git format-patch` form against the
+tarball plus `patch-7.3-redhat.patch`; docs/maintainer-guide.md
 shows how to rebase them.
 
 0002 was off by default up to the 7.1.13 kernels and is on from 7.2.11:
