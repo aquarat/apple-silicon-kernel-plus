@@ -70,8 +70,10 @@ the pin instead when the branch moves:
    `Version` tag; `Release: 1`; changelog.
 3. `scripts/build-srpms.sh mesa-coopmat`, `rpmbuild --rebuild`, then
    validate: `with-coopmat vulkaninfo` lists `VK_KHR_cooperative_matrix`,
-   ggml's `test-backend-ops` (MUL_MAT, RMS_NORM, FLASH_ATTN_EXT) passes
-   against the CPU backend, and a stock-vs-coopmat `llama-bench`.
+   ggml's `test-backend-ops` passes against the CPU backend over the 18
+   operations listed under Status plus `MUL_MAT` (a quick check: MUL_MAT, RMS_NORM,
+   FLASH_ATTN_EXT; before release: the full set, including q5 KV flash
+   attention and `iq3_s` `GET_ROWS`), and a stock-vs-coopmat `llama-bench`.
 
 ## Status
 
@@ -88,23 +90,24 @@ Compared with the system Mesa on the same machine:
   0.003 against the system driver's logits.
 - CLIP embeddings are bit-identical between builds of this commit.
 
-**Known bad.** ggml's `test-backend-ops` against the CPU backend, over 19
-operations (flash attention, `MUL_MAT_ID`, `GET_ROWS`, `SET_ROWS`, `CPY`,
-`ROPE`, `SOFT_MAX`, norms, SSM and delta-net ops), fails 682 of 8848 cases
-that all pass with the system Mesa:
+**Correctness (pin `20e478a1ab11`, M1 Max, 2026-11-17).** ggml's
+`test-backend-ops` against the CPU backend passes 8848 of 8848 cases over
+18 operations (flash attention, `MUL_MAT_ID`, `GET_ROWS`, `SET_ROWS`, `CPY`,
+`ROPE`, `SOFT_MAX`, norms, SSM and delta-net ops), plus all 2592 `MUL_MAT`
+and 136 GLU cases, the same as the system Mesa 26.2.6. Logits of a 24B
+Q6_K model are unchanged from the first pin: mean KL divergence 0.0028
+against the system driver, same top token 97.1%, perplexity ratio
+1.0005 ± 0.0010.
+
+The first pin, `71969e3`, failed 682 of those 8848 cases:
 
 - `FLASH_ATTN_EXT` with a `q5_0`/`q5_1` K/V cache (674 cases);
 - `GET_ROWS` on `iq3_s` (8 cases).
 
-Everything else in that run passes, including F16/F32/q4/q8 K/V flash
-attention and all `MUL_MAT_ID` types. So do not use a q5 KV cache
-(`-ctk`/`-ctv q5_0`/`q5_1`) or IQ3_S models with this driver until a release
-says otherwise.
-
-Those results are for the first pin, `71969e3`. Both failing groups unpack
-bit fields at variable offsets, and the system Mesa 26.2.6 has upstream
-`bbeb2dca` (AGX shifts do not mask the shift count, so NIR's
-`bitfield_extract` and fused-shift patterns could read the wrong bits) while
-`71969e3`'s base predates it. The pin `20e478a1ab11` adds that fix and two
-other compiler fixes. It is expected to clear these failures but has not been
-run on a GPU yet: rerun the sweep before relying on q5 KV or IQ3_S.
+Both groups unpack bit fields at variable offsets. `71969e3`'s Mesa base
+predates upstream `bbeb2dca` (AGX shifts do not mask the shift count, so
+NIR's `bitfield_extract` and fused-shift patterns could read the wrong bits),
+which this pin cherry-picks with two other compiler fixes; all 682 cases
+pass on this pin. A q5 KV cache and
+IQ3_S models are therefore fine on `20e478a1ab11` and later, but not on a
+host still running `71969e3`.
