@@ -2,10 +2,10 @@
 # apple-avd: the Asahi kernel tree's Apple AVD decoder driver with fixes,
 # as DKMS source. src/ is scripts/rebase-avd.sh output: the in-tree driver of
 # the kernel named below plus patches/. See README.md.
-%global base_kernel 7.3.1-900.asahiwip.plus1.fc44
+%global base_kernel 7.3.1-900.asahiwip.plus3.fc44
 
 Name:           apple-avd
-Version:        7.3.1.1
+Version:        7.3.1.2
 Release:        1%{?dist}
 Summary:        Apple AVD video decoder driver with stream fixes (DKMS source)
 # avd-hw.c, avd-inst.h, avd-regs.h: MIT. avd-av1-entropymode.c: BSD-2-Clause
@@ -81,6 +81,17 @@ dkms remove -m apple-avd -v %{version} --all --rpm_safe_upgrade >/dev/null 2>&1 
 %{_prefix}/lib/depmod.d/apple-avd.conf
 
 %changelog
+* Tue Nov 17 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 7.3.1.2-1
+- 0005: firmware without the config block but with the older "CODECS:"
+  trailer announces only the codecs in that list again (limited to the
+  SoC's), as the driver did before 7.2.15; the SoC's full list is assumed
+  only when the firmware has neither. 7.3.1.1 announced every codec the
+  SoC has for such firmware.
+- Rebased onto kernel-7.3.1-900.asahiwip.plus3.fc44 with
+  scripts/rebase-avd.sh: the same in-tree driver as plus1 (and as
+  asahi-wip of 2026-11-16); 0001-0004 apply unchanged and none of them is
+  covered upstream.
+
 * Sat Nov 07 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 7.3.1.1-1
 - The kernel-7.3.1-900.asahiwip.plus1.fc44 driver is the same as 7.2.15's:
   source and patches unchanged. DKMS builds it for 7.2 and 7.3 kernels, so

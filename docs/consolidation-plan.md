@@ -59,7 +59,7 @@ APCIEC as modules), apple-avd 0001-0004/0005, apple-ave 0.99.5.
    branch `kernel-7.2` (7.2.11 `plus5`: #2, retargeted there as #7).
 2. **Merge order** #3, then #6, then the move of `main` to 7.3.1 (#9).
 3. **GEM PRIME-import backport to 7.2: skipped.** 7.3.1 has the fix.
-4. **AVD stays DKMS.** On 7.3.1 it is `dkms-apple-avd` 7.3.1.1 (the
+4. **AVD stays DKMS.** On 7.3.1 it is `dkms-apple-avd` 7.3.1.2 (the
    7.2.15/7.3.1 driver plus 0005), built for 7.2 and 7.3 kernels, so a 7.2
    kernel kept for rollback keeps the patched decoder. No in-tree AVD
    patches for now.
