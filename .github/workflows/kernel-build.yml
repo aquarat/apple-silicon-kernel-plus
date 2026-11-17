@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Compile check of this project's kernel changes and DKMS modules
+# (scripts/kernel-build-check.sh): the directories the kernel patches
+# touch, the Apple device trees if a patch touches one, apple-avd and
+# apple-ave, against the kernel SRPM's prepared tree. Not a full build.
+# No secrets are used here.
+name: kernel-build
+
+on:
+  push:
+    paths:
+      - 'packages/kernel/**'
+      - 'packages/apple-avd/**'
+      - 'packages/apple-ave/**'
+      - 'scripts/make-srpm.sh'
+      - 'scripts/kernel-configs.py'
+      - 'scripts/kernel-build-check.sh'
+      - 'container/install-tools.sh'
+      - '.github/workflows/kernel-build.yml'
+  pull_request:
+    paths:
+      - 'packages/kernel/**'
+      - 'packages/apple-avd/**'
+      - 'packages/apple-ave/**'
+      - 'scripts/make-srpm.sh'
+      - 'scripts/kernel-configs.py'
+      - 'scripts/kernel-build-check.sh'
+      - 'container/install-tools.sh'
+      - '.github/workflows/kernel-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kernel-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    runs-on: ubuntu-24.04-arm
+    container: registry.fedoraproject.org/fedora:44
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install tools
+        # dtc: dkms-apple-ave requires it for its overlays.
+        run: container/install-tools.sh dtc
+      - name: Kernel SRPM
+        run: scripts/make-srpm.sh kernel out
+      - name: Compile the patched directories and the DKMS modules
+        run: WORK="$RUNNER_TEMP/kernel-build-check" scripts/kernel-build-check.sh out/kernel-*.src.rpm

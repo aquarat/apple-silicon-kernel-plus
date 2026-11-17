@@ -13,11 +13,12 @@ scripts/build-srpms.sh   runs make-srpm.sh in a Fedora 44 container (docker/podm
 scripts/kernel-configs.py applies the kernel config overlays; diffs configs
 scripts/asahi-kernel.py  finds and fetches @asahi's published kernel SRPMs
 scripts/kernel-watch.py  kernel status: does COPR need a build, what moved upstream?
+scripts/kernel-build-check.sh  compiles what the kernel patches touch, and the DKMS modules
 scripts/rebase-avd.sh    rebuilds packages/apple-avd/src for a kernel
 scripts/copr-setup.sh    creates the COPR project and package definitions
 .copr/Makefile           COPR's make_srpm entry point
 container/               the tools image (install-tools.sh is shared with CI)
-.github/workflows/       ci, kernel-watch, copr-build
+.github/workflows/       ci, kernel-build, kernel-watch, copr-build
 ```
 
 Downloads, git checkouts and the cargo cache go to `.cache/` (git-ignored).
@@ -32,6 +33,14 @@ PREP_CHECK=1 scripts/build-srpms.sh kernel     # also check patches and configs 
 FEDORA_SRPM=.cache/kernel-7.2.11-200.fc44.src.rpm scripts/build-srpms.sh kernel   # a local copy
 LINT=1 scripts/build-srpms.sh apple-ave        # rpmlint the SRPM
 ```
+
+`scripts/kernel-build-check.sh out/kernel-*.src.rpm` (in the tools
+container, or on a Fedora aarch64 machine with the kernel's build tools
+and `dtc`) prepares that SRPM's tree with its 16k config and compiles the
+directories of every C/Rust file the patches touch, the Apple device
+trees if a patch touches one, and `apple-avd` and `apple-ave` as DKMS
+would. The `kernel-build` workflow runs it on changes to the kernel or the
+module packages. It is a compile check, not a full build.
 
 The container is limited to 2 CPUs by default (`CPUS=`). A full binary
 build is `rpmbuild --rebuild out/<srpm>` on a Fedora aarch64 machine with
