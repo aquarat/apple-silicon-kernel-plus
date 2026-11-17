@@ -155,6 +155,14 @@ a headless machine), without Thunderbolt, which needs the 7.2 trees' nodes.
 
 ## Using the KVM patches (macOS guests)
 
+**macOS licence.** These packages contain no macOS software: you install
+macOS in a guest from your own copy. macOS guests remain subject to Apple's
+macOS software licence agreement, whose virtualisation terms allow macOS
+virtual machines only on Apple-branded hardware that is already running
+the Apple Software (macOS). Running them on a Mac booted into Linux may
+not meet those terms. You are responsible for complying with Apple's
+licence; this project makes no claim that any particular use does.
+
 Patch 0001 (PAuth VM-key context) is always active; it only affects guests
 on Apple CPUs. Patch 0002 (emulation of MMIO loads/stores that fault without
 an instruction syndrome, which macOS guests need because XNU accesses the
@@ -172,10 +180,12 @@ in [docs/kvm-macos-guests.md](docs/kvm-macos-guests.md).
 
 No Apple firmware, and no data taken from Apple's files, is in this
 repository or its packages. `apple-ave-fetch-firmware` makes the files on
-your Mac from Apple's macOS 13.5 restore image (read in place with HTTP
-range requests: about 0.5 MB, plus a 26 MB kernelcache unless the Asahi
-installer left one on the EFI partition), a local IPSW or a directory, and
-checks each against known sha256 values:
+your Mac from your own copy of Apple's macOS 13.5 files (the kernelcache
+the Asahi installer left on the EFI partition, plus a directory or a local
+restore image), and checks each against known sha256 values. It reads only
+local files unless you pass `--download-from-apple`, which reads the
+missing parts of Apple's restore image from Apple's servers after a notice
+that this is Apple software under Apple's licence terms:
 [packages/apple-ave/apple-ave-firmware.md](packages/apple-ave/apple-ave-firmware.md).
 
 ## Update policy

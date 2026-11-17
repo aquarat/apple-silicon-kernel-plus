@@ -9,10 +9,14 @@ the files on your Mac, from your own copy of Apple's files, and checks
 every one of them against `known-hashes.txt` (sha256).
 
 ```sh
-sudo apple-ave-fetch-firmware            # shows what it will do and asks first
-sudo apple-ave-fetch-firmware --dry-run  # the plan only: no network, nothing written
-apple-ave-fetch-firmware --check         # what is installed
+sudo apple-ave-fetch-firmware --from-dir DIR   # your copy of the files; shows the plan, asks first
+sudo apple-ave-fetch-firmware --ipsw FILE      # your copy of the 13.5 restore image
+sudo apple-ave-fetch-firmware --dry-run        # the plan only: no network, nothing written
+apple-ave-fetch-firmware --check               # what is installed
 ```
+
+The tool reads **local files only** unless you add `--download-from-apple`
+(below).
 
 ## What it makes
 
@@ -35,29 +39,50 @@ of the three it knows.
 
 ## Where Apple's files come from
 
+Local sources, used without any network access:
+
 1. **The kernelcache the Asahi installer left on the EFI system partition**
    (`/boot/efi/asahi/kernelcache.release.*`): this Mac's own 13.5
-   kernelcache. Used when its sha256 is a known one, so most machines
-   download no kernelcache at all. `--no-local-kernelcache` skips it.
-2. **Apple's restore image, read in place** (the default): macOS **13.5
-   (22G74)**,
-   `https://updates.cdn-apple.com/2023SummerFCS/fullrestores/032-69606/D3E05CDF-E105-434C-A4A1-4E3DC7668DD0/UniversalMac_13.5_22G74_Restore.ipsw`,
-   the URL the Asahi installer uses for 13.5. An IPSW is a ZIP; the tool
-   reads its directory (about 0.2 MB) and the members it needs with HTTP
-   range requests: the AVE firmware (about 0.5 MB over the wire) and,
-   unless (1) found one, the kernelcache (about 26 MB). Not the 12.9 GB
-   image.
-3. **A local IPSW**: `--ipsw UniversalMac_13.5_22G74_Restore.ipsw`.
-4. **A directory**: `--from-dir DIR` searches DIR for
+   kernelcache, the file Fedora Asahi Remix's firmware tools also read.
+   Used without any option when its sha256 is a known one.
+   `--no-local-kernelcache` skips it.
+2. **A directory**: `--from-dir DIR` searches DIR for
    `AppleAVE2FW_<variant>.im4p` (or a personalized `AVE.img4`) and a 13.5
-   kernelcache (`kernelcache.release.*`, or a personalized `kernelcache`),
-   e.g. a mounted macOS 13.5 Preboot volume. The Asahi stub's Preboot holds
-   them under `<volume group>/Restore/`. Tested with synthetic copies only;
-   mounting APFS from Linux (`apfs-fuse`, read-only) is up to you, and a
-   FileVault-encrypted volume cannot be read this way.
+   kernelcache (`kernelcache.release.*`, or a personalized `kernelcache`;
+   if DIR has none, (1) is used). DIR can be a mounted macOS 13.5 Preboot
+   volume, or any directory you copied the files into. The Asahi stub's
+   Preboot holds them under
+   `<volume group>/Restore/Firmware/ave/AppleAVE2FW_<variant>.im4p` and
+   `<volume group>/Restore/kernelcache.release.*` (the volume group is
+   `vgid` in `/boot/efi/asahi/stub_info.json`). From Linux that volume is
+   hard to read: Fedora's `apfs-fuse` could not open the stub's APFS
+   container on our M1 Max test machine. Copying the file from macOS (with
+   the stub's Preboot volume mounted there) may be simpler; this project
+   has not tested that route.
+3. **A local IPSW**: `--ipsw UniversalMac_13.5_22G74_Restore.ipsw`, your
+   copy of Apple's macOS **13.5 (22G74)** restore image.
 
 The Asahi installer's `all_firmware.tar.gz` does not contain the AVE
-firmware.
+firmware, so without (2) or (3) the tool finds the kernelcache but not the
+AVE firmware, says so, and stops.
+
+### Downloading from Apple (`--download-from-apple`, explicit only)
+
+With `--download-from-apple` the tool reads what it did not find locally
+from Apple's macOS 13.5 (22G74) restore image on Apple's servers,
+`https://updates.cdn-apple.com/2023SummerFCS/fullrestores/032-69606/D3E05CDF-E105-434C-A4A1-4E3DC7668DD0/UniversalMac_13.5_22G74_Restore.ipsw`,
+the URL the Asahi installer uses for 13.5. An IPSW is a ZIP; the tool
+reads its directory (about 0.2 MB) and the members it needs with HTTP
+range requests: the AVE firmware (about 0.5 MB over the wire) and, unless
+(1) found one, the kernelcache (about 26 MB). Not the 12.9 GB image.
+
+Before it downloads anything it prints a notice: the image is **Apple
+software, licensed under Apple's terms** (the macOS software licence
+agreement), not under this project's licence. Use the option only if you
+have the rights to that software, for example as the owner of the Mac you
+run it on. The files are made on your machine for its own use; this
+project does not redistribute them. `--dry-run --download-from-apple`
+shows the plan and the notice without downloading.
 
 ## Checks
 
@@ -97,9 +122,19 @@ sudo systemctl enable apple-ave-fetch-firmware.service
 ```
 
 runs `apple-ave-fetch-firmware --yes` before `apple-ave.service` on every
-boot. When the files are in place it does nothing and uses no network;
-when they are not, it downloads as in (2) above. Enabling it is your
-consent to that download; it is off by default.
+boot. It reads local files only and **never downloads**: it does not pass
+`--download-from-apple`, and the service runs without network access
+(`PrivateNetwork=yes`). When the files are in place it does nothing. To
+have it use a directory of your own copies, add a drop-in
+(`sudo systemctl edit apple-ave-fetch-firmware.service`):
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/bin/apple-ave-fetch-firmware --yes --from-dir /var/lib/apple-ave/macos-13.5
+```
+
+It is off by default.
 
 ## Without the tool
 

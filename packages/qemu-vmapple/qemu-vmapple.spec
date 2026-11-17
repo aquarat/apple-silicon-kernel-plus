@@ -23,7 +23,7 @@
 
 Name:           qemu-vmapple
 Version:        %{qemu_version}^%{qemu_date}git%(c=%{qemu_commit}; echo ${c:0:7})
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        QEMU for macOS guests (vmapple machine, out-of-process GPU proxy)
 # QEMU: GPL-2.0-only as a whole (its LICENSE); source files carry their own
 # GPL-2.0-compatible licences, mostly GPL-2.0-or-later, some LGPL-2.1-or-later,
@@ -98,6 +98,15 @@ version's removal script did that). Remove it whenever you like.
 
 %prep
 %setup -q -n qemu-reims-vgpu-%{qemu_short} -a 1
+# Source0 has none of QEMU's prebuilt firmware (scripts/make-srpm.sh removes
+# pc-bios/*.bin, *.rom, *.img, *.fd.bz2, dtb/*.dtb and the like). Drop the
+# meson rules that would read them: the EDK2 unpacking, the blob list
+# (installed only with --enable-install-blobs) and the device tree blobs.
+sed -i -e 's/^if unpack_edk2_blobs$/if false  # no prebuilt EDK2 in this SRPM/' \
+       -e "s/^if get_option('install_blobs')$/if false  # no prebuilt firmware in this SRPM/" \
+       -e "/^subdir('dtb')$/d" pc-bios/meson.build
+test "$(grep -c '^if false  # no prebuilt' pc-bios/meson.build)" = 2
+! grep -q "^subdir('dtb')" pc-bios/meson.build
 
 %build
 ./configure \
@@ -150,6 +159,12 @@ if ldd $q | grep -i vulkan; then exit 1; fi
 %license %{name}-%{version}-extra/LICENSE
 
 %changelog
+* Tue Nov 17 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 11.1.50^20261110gitacde6ba-2
+- The SRPM no longer carries QEMU's prebuilt firmware (pc-bios/ blobs:
+  SeaBIOS, iPXE, EDK2, OpenBIOS, SLOF, U-Boot, OpenSBI, device tree blobs
+  and others); none was installed. The package no longer installs the six
+  PowerPC and MicroBlaze device tree blobs in /usr/share/qemu-vmapple/dtb.
+
 * Tue Nov 10 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 11.1.50^20261110gitacde6ba-1
 - aquarat/qemu-reims-vgpu acde6ba: virtio-pci x-ascending-capabilities
   (default off) links each virtio device's capability list in address

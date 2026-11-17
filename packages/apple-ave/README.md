@@ -29,20 +29,25 @@ included.
 
 1. `sudo dnf install apple-ave` (pulls in `dkms-apple-ave`; DKMS needs
    `kernel-16k-devel` for each kernel).
-2. `sudo apple-ave-fetch-firmware`: shows what it will read from Apple
-   (the AVE firmware, about 0.5 MB, from Apple's macOS 13.5 restore image
-   on Apple's CDN; the kernelcache, about 26 MB, unless the Asahi installer
-   left this Mac's own on the EFI partition), asks, then makes, checks and
-   installs the files. `--dry-run` shows the plan without any network
-   access; `--ipsw FILE` and `--from-dir DIR` use local copies instead.
-   Details: [apple-ave-firmware.md](apple-ave-firmware.md).
+2. `sudo apple-ave-fetch-firmware --from-dir DIR` (or `--ipsw FILE`):
+   makes, checks and installs the files from your local copy of Apple's
+   macOS 13.5 files, after showing the plan and asking. The kernelcache is
+   taken from the EFI partition, where the Asahi installer left this Mac's
+   own; the AVE firmware (`AppleAVE2FW_<variant>.im4p`) must come from your
+   copy. The tool reads local files only. If you have the rights to
+   Apple's macOS 13.5 software, `--download-from-apple` reads the missing
+   parts from Apple's restore image on Apple's servers instead (about
+   0.5 MB, plus 26 MB for the kernelcache if the EFI partition has none),
+   after a notice that it is Apple software under Apple's licence terms.
+   `--dry-run` shows the plan without any network access. Details:
+   [apple-ave-firmware.md](apple-ave-firmware.md).
 3. `sudo systemctl enable --now apple-ave.service`
 4. `/usr/libexec/apple-ave/ave-load status` lists the encoder nodes
    (`apple-ave-enc` on `/dev/videoN`) and the firmware files.
 
 If the files are missing, `ave-load` loads nothing and says which command
-to run. To make them at boot instead (this may download from Apple's CDN):
-`sudo systemctl enable apple-ave-fetch-firmware.service`.
+to run. To make them at boot instead, from local files only (it never
+downloads): `sudo systemctl enable apple-ave-fetch-firmware.service`.
 
 To stop using the encoder: `sudo systemctl disable apple-ave.service` and
 reboot (the overlay cannot be removed from a running kernel).

@@ -15,17 +15,20 @@ from the user's own copy of Apple's files:
                                  (M1 only) the firmware's DATA as the boot
                                  loader leaves it, built from the image
 
-Where Apple's files come from, in this order:
+Where Apple's files come from. Local files only, unless asked otherwise:
 
-  * the Asahi installer's copy of this Mac's kernelcache on the EFI system
-    partition (asahi/kernelcache.release.*), when it is the 13.5 one;
+  * the kernelcache: the Asahi installer's copy of this Mac's kernelcache
+    on the EFI system partition (asahi/kernelcache.release.*), when it is
+    the 13.5 one; used without any option;
   * --from-dir DIR: a directory holding the files, such as a mounted macOS
     13.5 Preboot volume (Asahi's stub included) or a copy of one;
   * --ipsw FILE: a local copy of Apple's macOS 13.5 (22G74) restore image;
-  * by default, that image on Apple's CDN, read in place with HTTP range
-    requests, as Asahi Linux's installer does: only the members needed
-    (about 0.5 MB, and about 26 MB for the kernelcache unless the EFI
-    partition has it), never the 13 GB image.
+  * --download-from-apple, and only then: that image on Apple's CDN, read
+    in place with HTTP range requests, as Asahi Linux's installer does: only
+    the members not found locally (about 0.5 MB, and about 26 MB for the
+    kernelcache unless the EFI partition has it), never the 13 GB image.
+    That is Apple software under Apple's licence terms; the tool says so
+    before it downloads anything.
 
 Every input and output is checked against known-hashes.txt (sha256) before
 anything is written. A file that does not match is not installed.
@@ -36,13 +39,14 @@ of each boot and offers it in debugfs; --capture checks it against the
 image and installs it (ave-load does that after loading the driver).
 
 Usage:
-  apple-ave-fetch-firmware                 detect the SoC, show the plan, ask, install
+  apple-ave-fetch-firmware --from-dir DIR  search DIR for the files, show the plan, ask, install
+  apple-ave-fetch-firmware --ipsw FILE     read a local copy of the 13.5 IPSW
+  apple-ave-fetch-firmware --download-from-apple
+                                           read what is not on this machine from Apple's CDN
   apple-ave-fetch-firmware --dry-run       show the plan only (no network, no writes)
   apple-ave-fetch-firmware --yes           do not ask (for automation)
   apple-ave-fetch-firmware --check         report what is installed (exit 1 if incomplete)
   apple-ave-fetch-firmware --capture       install the pristine DATA the driver kept
-  apple-ave-fetch-firmware --ipsw FILE     read a local IPSW instead of the CDN
-  apple-ave-fetch-firmware --from-dir DIR  search DIR for the files
   apple-ave-fetch-firmware --output-dir D  write into D instead of /lib/firmware (no root)
 
 Exit status: 0 done (or nothing to do), 1 error, 2 usage, 3 declined.
@@ -56,6 +60,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zlib
 
@@ -75,7 +80,7 @@ Refused = G.Refused
 DERError = G.DERError
 im4p_payload = G.im4p_payload
 
-VERSION = "1.0"
+VERSION = "1.1"
 
 # The system firmware Asahi's installer sets up, and the image it comes from.
 # The same URL is in the Asahi installer's log of every 13.5 stub install.
@@ -84,6 +89,16 @@ IPSW_BUILD = "22G74"
 IPSW_SIZE = 12893195726
 IPSW_URL = ("https://updates.cdn-apple.com/2023SummerFCS/fullrestores/032-69606/"
             "D3E05CDF-E105-434C-A4A1-4E3DC7668DD0/UniversalMac_13.5_22G74_Restore.ipsw")
+
+DOWNLOAD_NOTICE = """\
+Notice: --download-from-apple reads parts of Apple's macOS {version} ({build})
+restore image from Apple's servers ({host}). That image is Apple software,
+licensed under Apple's terms (the macOS software licence agreement), not
+under this project's licence. Use this option only if you have the rights
+to that software, for example as the owner of this Mac. The files are made
+on this machine for its own use; nothing is redistributed. Without this
+option the tool reads only local files (--from-dir, --ipsw, the EFI
+partition)."""
 
 HASHES = os.environ.get("APPLE_AVE_KNOWN_HASHES",
                         "/usr/share/apple-ave/firmware/known-hashes.txt")
@@ -451,21 +466,37 @@ class Plan:
         kc_size = self.known[self.kc_key][1]
         lines = [f"SoC {self.soc} ({s['name']}): AVE firmware {s['variant']}, DPE tunables "
                  f"{s['dpe']}, from macOS {IPSW_VERSION} ({IPSW_BUILD})"]
-        if local_kc:
-            lines.append(f"Kernelcache: {local_kc} (on this machine; no download)")
-        if source["kind"] == "url":
+        kind, where = source["kind"], source["where"]
+        if kind == "ipsw":
+            lines.append(f"Source: the local IPSW {where} (no download)")
+        elif kind == "dir":
+            lines.append(f"AVE firmware: AppleAVE2FW_{s['variant']}.im4p or AVE.img4 under {where}")
+            lines.append(f"Kernelcache: a {IPSW_VERSION} kernelcache under {where}" +
+                         (f", else {local_kc}" if local_kc else ""))
+            lines.append("Source: local files only (no download)")
+        elif kind == "url":
+            lines.append(f"AVE firmware: {ave_member(s['variant'])}, from Apple's image (download)")
+            lines.append(f"Kernelcache: {local_kc} (on this machine; no download)" if local_kc else
+                         f"Kernelcache: {s['kc']}, from Apple's image (download)")
             need = [f"{ave_member(s['variant'])} (at most {human(ave_size)}; stored compressed)"]
             if not local_kc:
                 need.append(f"{s['kc']} ({human(kc_size)})")
-            lines += ["Source: Apple's restore image, read in place with HTTP range requests:",
-                      f"  {source['where']}",
+            lines += ["Source: Apple's restore image on Apple's servers, read in place with HTTP "
+                      "range requests (--download-from-apple):",
+                      f"  {where}",
                       "Download: " + " and ".join(need) +
                       f", plus the image's zip directory (about 0.2 MB); not the whole "
                       f"{human(IPSW_SIZE)} image"]
-        elif source["kind"] == "ipsw":
-            lines.append(f"Source: the local IPSW {source['where']}")
         else:
-            lines.append(f"Source: the files under {source['where']}")
+            lines.append(f"AVE firmware: not found. Without options the tool reads only the "
+                         f"EFI partition, which has no AVE firmware. Give your copy of "
+                         f"{ave_member(s['variant'])} with --from-dir DIR (a mounted macOS "
+                         f"{IPSW_VERSION} Preboot volume, or a directory you copied it into) or "
+                         f"--ipsw FILE; or, if you have the rights to Apple's macOS "
+                         f"{IPSW_VERSION} software, --download-from-apple")
+            lines.append(f"Kernelcache: {local_kc} (on this machine; no download)" if local_kc else
+                         f"Kernelcache: not found (no {IPSW_VERSION} kernelcache on the EFI "
+                         "partition)")
         lines.append("Checks: every Apple file and every file made from it, against "
                      "known-hashes.txt (sha256)")
         lines.append("Writes: " + ", ".join(self.path(p) for p in self.outputs))
@@ -522,6 +553,8 @@ class Sources:
         if self.zip is None:
             if self.args.ipsw:
                 self.src = FileSource(self.args.ipsw)
+            elif not self.args.download_from_apple:
+                raise Refused("not found locally, and --download-from-apple was not given")
             else:
                 self.log(f"Reading the zip directory of {self.args.url}")
                 self.src = HTTPSource(self.args.url, log=self.log)
@@ -572,12 +605,16 @@ class Sources:
     def kernelcache(self, local):
         p = self.plan
         keys = ["ipsw:" + n for n in KERNELCACHES if "ipsw:" + n in p.known]
+        if self.args.from_dir:
+            try:
+                return self._from_dir(list(KERNELCACHES) + ["kernelcache"], keys)
+            except Refused:
+                if not local:
+                    raise
         if local:
             b = read_file(local)
             self.log(f"Kernelcache: {local}")
             return b
-        if self.args.from_dir:
-            return self._from_dir(list(KERNELCACHES) + ["kernelcache"], keys)
         return self._from_zip(p.kc_key)
 
 
@@ -675,13 +712,20 @@ def parse_args(argv):
         prog="apple-ave-fetch-firmware",
         description="Make the AVE encoder's firmware files for this Mac from Apple's macOS "
                     f"{IPSW_VERSION} files, verify them, and install them.",
-        epilog="Nothing is downloaded or written without --yes or a 'y' at the prompt.")
+        epilog="Only local files are read unless --download-from-apple is given. Nothing is "
+               "downloaded or written without --yes or a 'y' at the prompt.")
     src = ap.add_mutually_exclusive_group()
-    src.add_argument("--url", default=IPSW_URL, help="the IPSW URL (default: Apple's 13.5 image)")
     src.add_argument("--ipsw", metavar="FILE", help="a local copy of the 13.5 IPSW")
     src.add_argument("--from-dir", metavar="DIR",
                      help="search DIR for AppleAVE2FW_<variant>.im4p (or AVE.img4) and a "
-                          "13.5 kernelcache (e.g. a mounted macOS 13.5 Preboot volume)")
+                          "13.5 kernelcache (e.g. a mounted macOS 13.5 Preboot volume); the "
+                          "kernelcache on the EFI partition is used if DIR has none")
+    src.add_argument("--download-from-apple", action="store_true",
+                     help="read what is not on this machine from Apple's macOS 13.5 restore "
+                          "image on Apple's servers. That is Apple software under Apple's "
+                          "licence terms: use this only if you have the rights to it")
+    ap.add_argument("--url", default=None,
+                    help="with --download-from-apple: the IPSW URL (default: Apple's 13.5 image)")
     ap.add_argument("--soc", help="SoC to make the files for (default: this machine's)")
     ap.add_argument("--output-dir", metavar="DIR",
                     help=f"write the files under DIR/apple/ instead of {FIRMWARE_DIR}")
@@ -716,6 +760,11 @@ def main(argv=None):
 
     def err(m):
         print(f"apple-ave-fetch-firmware: {m}", file=sys.stderr, flush=True)
+
+    if a.url and not a.download_from_apple:
+        err("--url is only used with --download-from-apple")
+        return 2
+    a.url = a.url or IPSW_URL
 
     try:
         known = load_hashes(a.hashes or default_hashes())
@@ -760,17 +809,29 @@ def main(argv=None):
 
     source = ({"kind": "dir", "where": a.from_dir} if a.from_dir else
               {"kind": "ipsw", "where": a.ipsw} if a.ipsw else
-              {"kind": "url", "where": a.url})
+              {"kind": "url", "where": a.url} if a.download_from_apple else
+              {"kind": "local", "where": None})
     if plan.complete() and not a.force:
         log(f"The {soc} files are installed and verified in {dest}; nothing to do.")
         return 0
-    local_kc = None if (a.no_local_kernelcache or a.from_dir or a.ipsw) else local_kernelcache(known)
+    local_kc = None if (a.no_local_kernelcache or a.ipsw) else local_kernelcache(known)
     log(plan.describe(source, local_kc))
     if board:
         log(f"This machine: {board}" + (f", system firmware {osfw}" if osfw else ""))
+    if source["kind"] == "url":
+        # Shown even with --quiet: this is the one path that downloads.
+        print(DOWNLOAD_NOTICE.format(version=IPSW_VERSION, build=IPSW_BUILD,
+                                     host=urllib.parse.urlsplit(a.url).hostname or a.url),
+              file=sys.stderr if a.quiet else sys.stdout, flush=True)
     if a.dry_run:
         log("Dry run: nothing downloaded or written.")
         return 0
+    if source["kind"] == "local":
+        err(f"the AVE firmware ({ave_member(plan.s['variant'])}) is not on this machine where "
+            "the tool looks without options. Give your copy of Apple's macOS 13.5 files with "
+            "--from-dir DIR or --ipsw FILE, or use --download-from-apple (read its notice "
+            "first: --dry-run --download-from-apple). Nothing was downloaded or installed.")
+        return 1
     if not a.yes:
         if not sys.stdin.isatty():
             err("not on a terminal: rerun with --yes to proceed without asking")
