@@ -5,10 +5,10 @@
 # firmware/ave_fwgen.py is that repository's tools/ave_fwgen.py.
 # See README.md. No Apple firmware, and no data taken from Apple's files, is
 # in this package: apple-ave-fetch-firmware makes them on the user's machine.
-%global ave_commit 9ab14e4
+%global ave_commit ff8bba6
 
 Name:           apple-ave
-Version:        0.99.5
+Version:        0.99.6
 Release:        1%{?dist}
 Summary:        EXPERIMENTAL Apple AVE H.264/HEVC video encoder driver
 License:        GPL-2.0-only
@@ -135,6 +135,15 @@ dkms remove -m apple-ave -v %{version} --all --rpm_safe_upgrade >/dev/null 2>&1 
 %{_libexecdir}/apple-ave/ave-load
 
 %changelog
+* Tue Nov 17 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 0.99.6-1
+- AVE driver commit ff8bba6 (upstream pull request 6, issue 5): a reload
+  no longer mistakes a pristine DATA blob whose iBoot fills are another
+  unit's for a core that has run (it checks live DATA against the image
+  and uses it as this boot's pristine); a cold core whose DAPF was never
+  programmed this boot is refused with its own message; removing a staged
+  load that never started the core no longer asks it to halt, so the next
+  full load in the same boot works. Only ave_drv.c and ave_fw.c change.
+
 * Tue Oct 20 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 0.99.5-1
 - AVE driver commit 9ab14e4. The upstream history was rewritten and 057c5df
   no longer exists; its equivalent there is 508c279 (the same driver/ and
