@@ -75,7 +75,9 @@ implementation of what Anees Iqbal first showed macOS guests need (see
 larger patch that also kept the station MAC filter on; Asahi's tree does
 that itself now. All three are in `git format-patch` form against the
 tarball plus `patch-7.3-redhat.patch`; docs/maintainer-guide.md
-shows how to rebase them.
+shows how to rebase them. (7.2.11 `plus5` also carried 0004, a backport
+of Asahi's fix for GPU kernel-VM buffers that were never freed; 7.3.1's
+Asahi base has that fix, so 0004 is not needed here.)
 
 0002 was off by default up to the 7.1.13 kernels and is on from 7.2.11:
 macOS guests need it, Linux guests never trigger it, and with it on KVM

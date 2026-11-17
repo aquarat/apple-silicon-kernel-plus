@@ -1,7 +1,7 @@
 # apple-silicon-kernel-plus
 
 RPM packages for Fedora Asahi Remix on Apple silicon Macs: a kernel from
-the Asahi Linux kernel tree (Linux 7.2, with
+the Asahi Linux kernel tree (Linux 7.3, with
 Thunderbolt/USB4 host support) and KVM patches for macOS guests, packaged
 like the Fedora Asahi kernel; video decoder and encoder drivers, a patched
 Vulkan driver, and QEMU for macOS guests with its paravirtual GPU as a
@@ -54,7 +54,7 @@ sudo dnf install dkms-apple-avd       # and/or: apple-ave, mesa-honeykrisp-plus,
 DKMS packages need `kernel-16k-devel` for each installed kernel.
 
 **Enabling this COPR moves you to this project's kernel, and that kernel is
-experimental.** It is Linux 7.2 from Asahi's integration branch, while
+experimental.** It is Linux 7.3 from Asahi's integration branch, while
 `@asahi` ships 7.1; it sorts as newer than every `@asahi` 7.1 kernel, so
 `dnf upgrade` installs it and makes it the default boot entry. Read
 [Rollback](#rollback) before you do: going back to a 7.1 kernel needs one
@@ -72,6 +72,7 @@ The kernel is `<Linux version>-<N>.asahiwip.plus<M>.fc44`:
 | this project, 7.2.11 with Thunderbolt networking | `7.2.11-900.asahiwip.plus2.fc44` | `7.2.11-900.asahiwip.plus2.fc44.aarch64+16k` |
 | this project, 7.2.11 with TSO forwarding | `7.2.11-900.asahiwip.plus3.fc44` | `7.2.11-900.asahiwip.plus3.fc44.aarch64+16k` |
 | this project, 7.2.11 with the independent PAuth patch | `7.2.11-900.asahiwip.plus4.fc44` | `7.2.11-900.asahiwip.plus4.fc44.aarch64+16k` |
+| this project, 7.2.11 with thunderbolt-net TSO for a lowered MSS and the GPU kernel-VM BO leak fix (branch `kernel-7.2`) | `7.2.11-900.asahiwip.plus5.fc44` | `7.2.11-900.asahiwip.plus5.fc44.aarch64+16k` |
 | this project, 7.2.15 | `7.2.15-900.asahiwip.plus1.fc44` | `7.2.15-900.asahiwip.plus1.fc44.aarch64+16k` |
 | this project, 7.3.1 | `7.3.1-900.asahiwip.plus1.fc44` | `7.3.1-900.asahiwip.plus1.fc44.aarch64+16k` |
 | this project, 7.3.1 with thunderbolt-net TSO for a lowered MSS | `7.3.1-900.asahiwip.plus2.fc44` | `7.3.1-900.asahiwip.plus2.fc44.aarch64+16k` |
@@ -117,11 +118,11 @@ dnf then takes `kernel-16k` only from this repository.
 ## Rollback
 
 Kernels are install-only: the previous ones stay installed and are listed
-in the boot menu. **But do not boot a 7.1 kernel while a 7.2 kernel from
-this project is installed.** m1n1 gives the kernel the device trees in the
+in the boot menu. **But do not boot a 7.1 kernel while a 7.2 or later kernel
+from this project is installed.** m1n1 gives the kernel the device trees in the
 EFI partition's `m1n1/boot.bin`, and `update-m1n1` writes the device trees
 of the newest installed kernel there. A 7.1 kernel booted with the 7.2
-Asahi device trees hung in testing before the network came up (the likely
+(or later) Asahi device trees hung in testing before the network came up (the likely
 cause: the display controller's IOMMU cells changed in 7.2). So point `/boot/dtb` (what `update-m1n1` reads) at the 7.1
 kernel's trees before you boot it:
 
