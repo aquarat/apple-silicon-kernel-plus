@@ -22,7 +22,7 @@ run() { echo "+ $*"; [ "${DRY_RUN:-0}" = 1 ] || "$@"; }
 
 # package -> the "spec" path the Makefile derives the package from
 declare -A SPEC=(
-    [kernel]=packages/kernel/kernel-plus.conf
+    [kernel]=packages/kernel/kernel.spec
     [apple-avd]=packages/apple-avd/apple-avd.spec
     [apple-ave]=packages/apple-ave/apple-ave.spec
     [apple-silicon-thunderbolt]=packages/apple-silicon-thunderbolt/apple-silicon-thunderbolt.spec
@@ -44,17 +44,19 @@ LICENCE_NOTE="Licences: the kernel and the AVD/AVE drivers GPL-2.0-only (the AVD
 
 DESCRIPTION="Unofficial packages for Fedora Asahi Remix: an experimental kernel from the Asahi Linux kernel tree (a newer Linux than @asahi's, with Thunderbolt/USB4) with KVM patches for macOS guests, AVD/AVE video drivers (DKMS), a patched Honeykrisp Vulkan driver, an opt-in Honeykrisp build with cooperative matrices for GPU compute, and QEMU with vmapple plus the Reims paravirtual GPU as a separate process. Not affiliated with or endorsed by Asahi Linux, Fedora or Apple. $LICENCE_NOTE"
 
+INSTRUCTIONS="See https://github.com/aquarat/apple-silicon-kernel-plus#install. Enabling this repository replaces the stock @asahi kernel with this project's experimental kernel build; read the README's Rollback section first. Do not report bugs from these packages to Asahi Linux or Fedora."
+
 name=${PROJECT#*/}
 if ! copr-cli get "$PROJECT" >/dev/null 2>&1; then
     chroot_args=()
     for c in "${CHROOTS[@]}"; do chroot_args+=(--chroot "$c"); done
     run copr-cli create "$name" "${chroot_args[@]}" \
         --description "$DESCRIPTION" \
-        --instructions "See https://github.com/aquarat/apple-silicon-kernel-plus#install. Enabling this repository replaces the stock @asahi kernel with this project's experimental kernel build; read the README's Rollback section first. Do not report bugs from these packages to Asahi Linux or Fedora." \
+        --instructions "$INSTRUCTIONS" \
         --enable-net off --unlisted-on-hp off --appstream off
 else
-    # Keep the description current on an existing project.
-    run copr-cli modify "$PROJECT" --description "$DESCRIPTION"
+    # Keep the description and instructions current on an existing project.
+    run copr-cli modify "$PROJECT" --description "$DESCRIPTION" --instructions "$INSTRUCTIONS"
 fi
 
 for p in "${!SPEC[@]}"; do
