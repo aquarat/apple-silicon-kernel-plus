@@ -59,7 +59,10 @@ APCIEC as modules), apple-avd 0001-0004/0005, apple-ave 0.99.5.
    branch `kernel-7.2` (7.2.11 `plus5`: #2, retargeted there as #7).
 2. **Merge order** #3, then #6, then the move of `main` to 7.3.1 (#9).
 3. **GEM PRIME-import backport to 7.2: skipped.** 7.3.1 has the fix.
-4. **AVD stays DKMS.** No in-tree AVD patches for now.
+4. **AVD stays DKMS.** On 7.3.1 it is `dkms-apple-avd` 7.3.1.2 (the
+   7.2.15/7.3.1 driver plus 0005), built for 7.2 and 7.3 kernels, so a 7.2
+   kernel kept for rollback keeps the patched decoder. No in-tree AVD
+   patches for now.
 5. **PMP device trees stay out** of this project.
 6. **CI compile job** (see CI).
 7. **VRR experiments stay out.**
@@ -80,18 +83,12 @@ Done, on `main` unless stated:
 - **apple-ave 0.99.6**: #4 (`main` before the move), #8 (`kernel-7.3`).
 - **The mirror tag** `plus/asahi-wip-7.3.1-c2e6784b008c` in
   [aquarat/linux](https://github.com/aquarat/linux).
-- **CI compile job**: #10, with the fix for patched files in
-  subdirectories without their own Makefile in the follow-up PR that
-  also brings this status section.
-
-Pending:
-
-- **dkms-apple-avd on 7.3.1**: `main` packages 7.3.1.1 (the 7.2.15/7.3.1
-  driver plus 0005, `BUILD_EXCLUSIVE_KERNEL` for 7.2 and 7.3 kernels),
-  carried over from the 7.3 line, but its DKMS builds against the 7.3.1
-  `plus3` kernel and a 7.2 kernel are not yet checked (in progress). Also
-  open: whether 0005's fallback should keep honouring the codec list of
-  older firmware that has the legacy `CODECS:` trailer (review on #9).
+- **CI compile job**: #10, and #13 (patched files in subdirectories
+  without their own Makefile are built through their parent's Makefile).
+- **dkms-apple-avd 7.3.1.2**: #12. Rebased onto 7.3.1 `plus3`; 0005 keeps
+  the codec list of older firmware with the legacy `CODECS:` trailer and
+  assumes the SoC's list only when the firmware has neither (review on
+  #9). Compiles against 7.3.1 and 7.2.11 headers.
 
 ## Still to test on hardware (7.3.1)
 

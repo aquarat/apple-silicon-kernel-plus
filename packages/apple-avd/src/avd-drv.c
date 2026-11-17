@@ -27,6 +27,8 @@
 #define AVD_CONFIG_OFFSET	0x400
 #define AVD_CONFIG_SIZE		0x100
 #define AVD_CONFIG_CODEC_OFFSET	0x4
+/* the "CODECS:" trailer of avd-fw from before the config block */
+#define AVD_CODEC_INFO_MAX_SIZE	0x40
 #define AVD_CONFIG_MAGIC	((u32)'A' | ((u32)'V' << 8) | \
 				 ((u32)'D' << 16) | ((u32)'c' << 24))
 
@@ -745,11 +747,35 @@ static int avd_probe(struct platform_device *pdev)
 		u32 fw_caps = get_unaligned_le32(avd->fw->data + codec_offset);
 		avd->capabilities = fw_caps & avd->variant->capabilities;
 	} else {
-		/* avd-fw from before the config block: as Asahi's driver did until
-		 * 7.2.15, trust the SoC's list.
+		/*
+		 * avd-fw from before the config block: as Asahi's driver did
+		 * until 7.2.15, take the codec list from the firmware's
+		 * "CODECS:" trailer, limited to what the SoC can do, and trust
+		 * the SoC's list only for firmware that has neither.
 		 */
-		dev_warn(avd->dev, "Firmware without config block, assuming the SoC's codecs\n");
-		avd->capabilities = avd->variant->capabilities;
+		const char *codec_info = (const char *)avd->fw->data +
+					 avd->fw->size - AVD_CODEC_INFO_MAX_SIZE;
+		unsigned int variant_caps = avd->variant->capabilities;
+
+		if (strncmp(codec_info, "CODECS:", 7) == 0) {
+			unsigned int caps = 0;
+
+			if (strnstr(codec_info, "av1", AVD_CODEC_INFO_MAX_SIZE))
+				caps |= variant_caps & AVD_CAPABILITY_AV1;
+			if (strnstr(codec_info, "h264", AVD_CODEC_INFO_MAX_SIZE))
+				caps |= variant_caps & AVD_CAPABILITY_H264;
+			if (strnstr(codec_info, "h265", AVD_CODEC_INFO_MAX_SIZE))
+				caps |= variant_caps & AVD_CAPABILITY_HEVC;
+			if (strnstr(codec_info, "vp9", AVD_CODEC_INFO_MAX_SIZE))
+				caps |= variant_caps & AVD_CAPABILITY_VP9;
+
+			dev_warn(avd->dev, "Firmware without config block, codecs from its trailer: %.27s\n",
+				 codec_info + 7);
+			avd->capabilities = caps;
+		} else {
+			dev_warn(avd->dev, "Firmware without config block or codec list, assuming the SoC's codecs\n");
+			avd->capabilities = variant_caps;
+		}
 	}
 
 	ret = dma_set_mask_and_coherent(avd->dev,
