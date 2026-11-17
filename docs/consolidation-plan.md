@@ -53,7 +53,7 @@ APCIEC as modules), apple-avd 0001-0004/0005, apple-ave 0.99.5.
 
 ## Merge now
 
-1. **7.3: the independent PAuth patch** (PR "Kernel 7.3.1 plus3").
+1. **7.3: the independent PAuth patch** (PR #6, "Kernel 7.3.1 plus3").
    `main`'s 0001 rebased to 7.3.1 by context only (two hunks, no code
    change), plus `main` merged into the 7.3 branch so it has the
    provenance document, CREDITS/LICENSING wording, mesa-coopmat and the
@@ -126,7 +126,7 @@ In order:
 | tree | now | after the open PRs |
 |---|---|---|
 | 7.2.11 (`main`) | `900.asahiwip.plus4` | `plus5` (PR #2) |
-| 7.3.1 (`kernel-7.3`) | `900.asahiwip.plus1` | `plus2` (PR #3), `plus3` (this plan's PR) |
+| 7.3.1 (`kernel-7.3`) | `900.asahiwip.plus1` | `plus2` (PR #3), `plus3` (PR #6) |
 
 - 7.3.1 `plus1` was built and run as a test kernel, and `plus2` is taken
   by PR #3; neither number is reused for different content. If PR #3 and the plus3 PR merge in the other
