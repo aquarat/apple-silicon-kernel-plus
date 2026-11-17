@@ -54,11 +54,13 @@ sudo dnf install dkms-apple-avd       # and/or: apple-ave, mesa-honeykrisp-plus,
 DKMS packages need `kernel-16k-devel` for each installed kernel.
 
 **Enabling this COPR moves you to this project's kernel, and that kernel is
-experimental.** It is Linux 7.3 from Asahi's integration branch, while
-`@asahi` ships 7.1; it sorts as newer than every `@asahi` 7.1 kernel, so
-`dnf upgrade` installs it and makes it the default boot entry. Read
-[Rollback](#rollback) before you do: going back to a 7.1 kernel needs one
-extra step. See also [Kernel release naming](#kernel-release-naming).
+experimental.** It is the Linux version named at the top of this README,
+from the Asahi Linux kernel tree, usually newer than the one `@asahi`
+ships. It sorts as newer than every `@asahi` kernel of the same or an
+older Linux version, so `dnf upgrade` installs it and makes it the
+default boot entry. Read [Rollback](#rollback) before you do: going back
+to a stock kernel of an older Linux version needs one extra step. See
+also [Kernel release naming](#kernel-release-naming).
 
 ## Kernel release naming
 
@@ -118,21 +120,25 @@ dnf then takes `kernel-16k` only from this repository.
 ## Rollback
 
 Kernels are install-only: the previous ones stay installed and are listed
-in the boot menu. **But do not boot a 7.1 kernel while a 7.2 or later kernel
-from this project is installed.** m1n1 gives the kernel the device trees in the
-EFI partition's `m1n1/boot.bin`, and `update-m1n1` writes the device trees
-of the newest installed kernel there. A 7.1 kernel booted with the 7.2
-(or later) Asahi device trees hung in testing before the network came up (the likely
-cause: the display controller's IOMMU cells changed in 7.2). So point `/boot/dtb` (what `update-m1n1` reads) at the 7.1
-kernel's trees before you boot it:
+in the boot menu. **But do not boot a kernel of an older Linux version
+than this project's newest installed kernel without switching the device
+trees first.** m1n1 gives the kernel the device trees in the EFI
+partition's `m1n1/boot.bin`, and `update-m1n1` writes the device trees of
+the newest installed kernel there. The Asahi device trees change between
+Linux versions: a 7.1 kernel booted with 7.2 (or later) trees hung in
+testing before the network came up (the likely cause: the display
+controller's IOMMU cells changed in 7.2), and other older-kernel, newer-tree
+pairs are untested. So point `/boot/dtb` (what `update-m1n1` reads) at the
+older kernel's own trees before you boot it:
 
 ```sh
 sudo dnf copr disable aquarat/apple-silicon-kernel-plus
 sudo dnf remove dkms-apple-avd apple-ave dkms-apple-ave mesa-honeykrisp-plus mesa-coopmat 'qemu-vmapple*' reims-vgpu-backend   # what you installed
 dnf list --installed 'kernel-16k-core'          # is a stock (.asahi.fc44) kernel installed?
-sudo dnf install kernel-16k-7.1.13-402.asahi.fc44   # if not (or another stock version)
-K=7.1.13-402.asahi.fc44.aarch64+16k             # the stock kernel's release, as in /boot/vmlinuz-*
-sudo ln -sfn "dtb-$K" /boot/dtb && sudo update-m1n1   # boot.bin now has the 7.1 device trees
+dnf list --available --showduplicates 'kernel-16k'   # if not: the stock versions @asahi offers
+sudo dnf install kernel-16k-<version>.asahi.fc44     # one of them, e.g. kernel-16k-7.2.12-402.asahi.fc44
+K=<version>.asahi.fc44.aarch64+16k              # the stock kernel's release, as in /boot/vmlinuz-*
+sudo ln -sfn "dtb-$K" /boot/dtb && sudo update-m1n1   # boot.bin now has that kernel's device trees
 sudo grubby --set-default "/boot/vmlinuz-$K"
 sudo reboot
 # after booting the stock kernel:
@@ -141,17 +147,18 @@ sudo dnf remove $(rpm -qa 'kernel-16k*' | grep '\.asahi\.plus[0-9]')   # older k
 sudo dnf distro-sync
 ```
 
-If a 7.1 kernel was booted with the 7.2 device trees and hangs: the
+If an older kernel was booted with newer device trees and hangs: the
 previous image is kept as `m1n1/boot.bin.old` on the EFI partition. In
 macOS recovery (hold the power button, Options, Terminal), mount the EFI
 partition of the Asahi install (`diskutil list`, `diskutil mount diskXsY`)
 and copy `boot.bin.old` over `boot.bin`.
 
-Keeping 7.1 device trees on purpose: setting
-`DTBS=/usr/lib/modules/<7.1 kernel>/dtb` in `/etc/sysconfig/update-m1n1`
-makes every kernel boot with those trees, so 7.1 kernels stay safe to
-boot. This project's 7.2 kernel booted with 7.1-based trees in testing (on
-a headless machine), without Thunderbolt, which needs the 7.2 trees' nodes.
+Keeping an older kernel's device trees on purpose: setting
+`DTBS=/usr/lib/modules/<older kernel>/dtb` in `/etc/sysconfig/update-m1n1`
+makes every kernel boot with those trees, so that kernel stays safe to
+boot. Newer kernels may then miss nodes they need: this project's 7.2
+kernel booted with 7.1-based trees in testing (on a headless machine), but
+without Thunderbolt, which needs the 7.2 trees' nodes.
 
 ## Using the KVM patches (macOS guests)
 

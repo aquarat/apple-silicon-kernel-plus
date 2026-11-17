@@ -42,7 +42,7 @@ declare -A TIMEOUT=([kernel]=72000 [qemu-vmapple]=36000 [reims-vgpu-backend]=360
 # Appended to the project description: the licences, and the trademarks it names.
 LICENCE_NOTE="Licences: the kernel and the AVD/AVE drivers GPL-2.0-only (the AVD driver also MIT and BSD-2-Clause files); Mesa MIT; QEMU GPL-2.0-only with GPL-2.0-compatible files; Reims LGPL-3.0-or-later and GPL-2.0-or-later with permissively licensed Rust crates; this project's scripts GPL-2.0-only. Details: https://github.com/aquarat/apple-silicon-kernel-plus/blob/main/LICENSING.md. No Apple firmware or macOS software is included. Fedora is a trademark of Red Hat, Inc.; Apple, Mac and Metal are trademarks of Apple Inc."
 
-DESCRIPTION="Unofficial packages for Fedora Asahi Remix: an experimental kernel from the Asahi Linux asahi-wip tree (Linux 7.2, Thunderbolt/USB4) with KVM patches for macOS guests, AVD/AVE video drivers (DKMS), a patched Honeykrisp Vulkan driver, an opt-in Honeykrisp build with cooperative matrices for GPU compute, and QEMU with vmapple plus the Reims paravirtual GPU as a separate process. Not affiliated with or endorsed by Asahi Linux, Fedora or Apple. $LICENCE_NOTE"
+DESCRIPTION="Unofficial packages for Fedora Asahi Remix: an experimental kernel from the Asahi Linux kernel tree (a newer Linux than @asahi's, with Thunderbolt/USB4) with KVM patches for macOS guests, AVD/AVE video drivers (DKMS), a patched Honeykrisp Vulkan driver, an opt-in Honeykrisp build with cooperative matrices for GPU compute, and QEMU with vmapple plus the Reims paravirtual GPU as a separate process. Not affiliated with or endorsed by Asahi Linux, Fedora or Apple. $LICENCE_NOTE"
 
 name=${PROJECT#*/}
 if ! copr-cli get "$PROJECT" >/dev/null 2>&1; then
@@ -50,7 +50,7 @@ if ! copr-cli get "$PROJECT" >/dev/null 2>&1; then
     for c in "${CHROOTS[@]}"; do chroot_args+=(--chroot "$c"); done
     run copr-cli create "$name" "${chroot_args[@]}" \
         --description "$DESCRIPTION" \
-        --instructions "See https://github.com/aquarat/apple-silicon-kernel-plus#install. Enabling this repository replaces the stock @asahi kernel with this project's experimental 7.2 build; read the README's Rollback section first. Do not report bugs from these packages to Asahi Linux or Fedora." \
+        --instructions "See https://github.com/aquarat/apple-silicon-kernel-plus#install. Enabling this repository replaces the stock @asahi kernel with this project's experimental kernel build; read the README's Rollback section first. Do not report bugs from these packages to Asahi Linux or Fedora." \
         --enable-net off --unlisted-on-hp off --appstream off
 else
     # Keep the description current on an existing project.
