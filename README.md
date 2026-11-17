@@ -21,6 +21,7 @@ Linux or Fedora; report them here.
 | `dkms-apple-avd` | The Asahi AVD video decoder driver with four fixes for long-running streams, built by DKMS. [packages/apple-avd](packages/apple-avd) | stable |
 | `apple-ave`, `dkms-apple-ave` | A V4L2 H.264/HEVC encoder driver for the AVE block, reverse engineered, and `apple-ave-fetch-firmware`, which makes its firmware files on your Mac from Apple's own image. No Apple firmware or Apple data included. [packages/apple-ave](packages/apple-ave) | **experimental** ([why](packages/apple-ave/README.md#status)) |
 | `mesa-honeykrisp-plus` | Mesa's Asahi Vulkan driver (Honeykrisp) with two shader compiler fixes, installed beside the system Mesa and used only through `VK_DRIVER_FILES`. Patch 0002 is still being validated. [packages/mesa-honeykrisp-plus](packages/mesa-honeykrisp-plus) | stable (0002: in validation) |
+| `mesa-coopmat` | Mesa's Asahi Vulkan driver from the `coopmat` branch of [aquarat/mesa](https://github.com/aquarat/mesa) (Mesa main + `VK_KHR_cooperative_matrix`), pinned to one commit, for GPU compute through ggml (llama.cpp, stable-diffusion.cpp). Its own versioned directory, opt-in per process with `with-coopmat <command>`; the system Mesa stays the default. [packages/mesa-coopmat](packages/mesa-coopmat) | experimental (new package) |
 | `qemu-vmapple` | QEMU with the `vmapple` machine for macOS guests, installed beside Fedora's qemu. Its paravirtual GPU runs out of process: the `apv-gpu-proxy` device forwards it to `reims-vgpu-backend`; no GPU code in QEMU. (`qemu-vmapple-kvm-nisv` is retired: an empty package now, see [its README](packages/qemu-vmapple/README.md#qemu-vmapple-kvm-nisv-retired).) [packages/qemu-vmapple](packages/qemu-vmapple) | experimental (out-of-process GPU: new in this release; in production use since 2026-10-19) |
 | `reims-vgpu-backend` | Reims, the paravirtual GPU of macOS guests, as its own program: runs the guest's Metal work on the host's Vulkan driver (with `mesa-honeykrisp-plus`), for `qemu-vmapple`. [packages/reims-vgpu-backend](packages/reims-vgpu-backend) | experimental (new package; in production use since 2026-10-19) |
 
@@ -30,10 +31,11 @@ As the sources state; "tested" means on at least one machine of that SoC.
 
 | package | SoCs |
 |---|---|
-| kernel | what the Asahi tree supports (M1 and M2 families). Thunderbolt/USB4: the Asahi tree's device trees describe it for t8103, t8112 and t600x; USB3 tunnels and XDomain (thunderbolt-net, with this project's flow-control, page-pool, per-machine UID and forwarding patches; tested Mac-to-Mac between t6001, t8103 and t6002, including a Mac bridging its 10GbE port and Thunderbolt ports for other Macs that reach the LAN only over Thunderbolt); PCIe tunnels on t600x with `pcie-apple-apciec` (tested on t6001, Mac Studio port 3, NVMe enclosure; known issues in [apple-silicon-thunderbolt-linux](https://github.com/aquarat/apple-silicon-thunderbolt-linux#status-and-known-issues)); no DisplayPort tunnels. The KVM patches act only on CPUs with Apple's ACTLR virtualization (M1: t8103, t6000, t6001, t6002; M2: t8112, t6020, t6021, t6022); tested on t6001 and t6002 (macOS guests, plus3) |
+| kernel | what the Asahi tree supports (M1 and M2 families). Thunderbolt/USB4: the Asahi tree's device trees describe it for t8103, t8112 and t600x; USB3 tunnels and XDomain (thunderbolt-net, with this project's flow-control, page-pool, per-machine UID and forwarding patches; tested Mac-to-Mac between t6001, t8103 and t6002, including a Mac bridging its 10GbE port and Thunderbolt ports for other Macs that reach the LAN only over Thunderbolt); PCIe tunnels on t600x with `pcie-apple-apciec` (tested on t6001, Mac Studio port 3, NVMe enclosure; known issues in [apple-silicon-thunderbolt-linux](https://github.com/aquarat/apple-silicon-thunderbolt-linux#status-and-known-issues)); no DisplayPort tunnels. The KVM PAuth patch acts only on M1 and M2 CPUs (t8103, t6000, t6001, t6002; t8112, t6020, t6021, t6022), under VHE on bare metal; tested on t6001 and t6002 (macOS guests, plus3), and its plus4 rewrite on t6001 (7.2.11; the 7.3.1 rebase is build-tested only) |
 | dkms-apple-avd | M1 family (t8103, t6000, t6001, t6002); t8112: H.264 works, HEVC times out (open) |
 | apple-ave | t6000, t8103 (H.264 without B frames), t8112; t6001 and t6002 after enabling them (not yet run in this configuration). All with the macOS 13.5 system firmware |
 | mesa-honeykrisp-plus | M1 and M2 GPUs, as Mesa's Asahi driver |
+| mesa-coopmat | M1 and M2 GPUs; run on t6001 (M1 Max) |
 | qemu-vmapple | hosts that run the kernel above; macOS 13 and 26 guests used on t6001 and t6002 hosts |
 | reims-vgpu-backend | M1 and M2 GPUs, with `mesa-honeykrisp-plus`; the out-of-process GPU used with macOS 26 guests on a t6002 host |
 
@@ -45,7 +47,7 @@ yet; this line is a placeholder until it does).
 ```sh
 sudo dnf copr enable aquarat/apple-silicon-kernel-plus
 sudo dnf upgrade                      # moves you to this project's kernel (see below)
-sudo dnf install dkms-apple-avd       # and/or: apple-ave, mesa-honeykrisp-plus, apple-silicon-thunderbolt,
+sudo dnf install dkms-apple-avd       # and/or: apple-ave, mesa-honeykrisp-plus, mesa-coopmat, apple-silicon-thunderbolt,
                                       #   qemu-vmapple (recommends reims-vgpu-backend)
 ```
 
@@ -68,10 +70,12 @@ The kernel is `<Linux version>-<N>.asahiwip.plus<M>.fc44`:
 | this project, up to 7.1.13 | `7.1.13-402.asahi.plus1.fc44` | `7.1.13-402.asahi.plus1.fc44.aarch64+16k` |
 | this project, 7.2.11 before Thunderbolt networking | `7.2.11-900.asahiwip.plus1.fc44` | `7.2.11-900.asahiwip.plus1.fc44.aarch64+16k` |
 | this project, 7.2.11 with Thunderbolt networking | `7.2.11-900.asahiwip.plus2.fc44` | `7.2.11-900.asahiwip.plus2.fc44.aarch64+16k` |
-| this project, 7.2.11 with forwardable TSO | `7.2.11-900.asahiwip.plus3.fc44` | `7.2.11-900.asahiwip.plus3.fc44.aarch64+16k` |
+| this project, 7.2.11 with TSO forwarding | `7.2.11-900.asahiwip.plus3.fc44` | `7.2.11-900.asahiwip.plus3.fc44.aarch64+16k` |
+| this project, 7.2.11 with the independent PAuth patch | `7.2.11-900.asahiwip.plus4.fc44` | `7.2.11-900.asahiwip.plus4.fc44.aarch64+16k` |
 | this project, 7.2.15 | `7.2.15-900.asahiwip.plus1.fc44` | `7.2.15-900.asahiwip.plus1.fc44.aarch64+16k` |
 | this project, 7.3.1 | `7.3.1-900.asahiwip.plus1.fc44` | `7.3.1-900.asahiwip.plus1.fc44.aarch64+16k` |
-| this project now (thunderbolt-net TSO for a lowered MSS) | `7.3.1-900.asahiwip.plus2.fc44` | `7.3.1-900.asahiwip.plus2.fc44.aarch64+16k` |
+| this project, 7.3.1 with thunderbolt-net TSO for a lowered MSS | `7.3.1-900.asahiwip.plus2.fc44` | `7.3.1-900.asahiwip.plus2.fc44.aarch64+16k` |
+| this project now (7.3.1, independent PAuth patch) | `7.3.1-900.asahiwip.plus3.fc44` | `7.3.1-900.asahiwip.plus3.fc44.aarch64+16k` |
 
 - The version is the Linux release the pinned Asahi commit is based on
   (`KERNEL_VERSION` in `packages/kernel/kernel-plus.conf`).
@@ -123,7 +127,7 @@ kernel's trees before you boot it:
 
 ```sh
 sudo dnf copr disable aquarat/apple-silicon-kernel-plus
-sudo dnf remove dkms-apple-avd apple-ave dkms-apple-ave mesa-honeykrisp-plus 'qemu-vmapple*' reims-vgpu-backend   # what you installed
+sudo dnf remove dkms-apple-avd apple-ave dkms-apple-ave mesa-honeykrisp-plus mesa-coopmat 'qemu-vmapple*' reims-vgpu-backend   # what you installed
 dnf list --installed 'kernel-16k-core'          # is a stock (.asahi.fc44) kernel installed?
 sudo dnf install kernel-16k-7.1.13-402.asahi.fc44   # if not (or another stock version)
 K=7.1.13-402.asahi.fc44.aarch64+16k             # the stock kernel's release, as in /boot/vmlinuz-*
@@ -186,6 +190,7 @@ Short version ([docs/update-policy.md](docs/update-policy.md)):
   kernel series; until then DKMS skips the new series and the in-tree
   driver is used.
 - **mesa-honeykrisp-plus:** follows Fedora's Mesa version, by hand.
+- **mesa-coopmat:** follows the `coopmat` branch of aquarat/mesa, by hand.
 - **qemu-vmapple, reims-vgpu-backend, apple-ave:** follow their upstream
   repositories, by hand.
 
@@ -206,9 +211,12 @@ COPR builds the same SRPMs through `.copr/Makefile`. Maintainer guide:
 ## Credits
 
 - Anees Iqbal ([steelbrain](https://github.com/steelbrain)): the original
-  macOS-on-Asahi-KVM work, the Linux PAuth VM-key patch that kernel patch
-  0001 is a rebase of, and Reims, the paravirtual GPU in
+  macOS-on-Asahi-KVM work, the first demonstration that macOS guests need
+  Apple's PAuth virtualization state (kernel patch 0001 is an independent
+  implementation of it from `plus4`), and Reims, the paravirtual GPU in
   reims-vgpu-backend.
+- The m1n1 developers: the Apple PAuth register definitions 0001 is
+  written from.
 - The Asahi Linux contributors and the Fedora Asahi SIG: the kernel tree
   (including Sven Peter's Thunderbolt/USB4 series), the AVD driver, and the
   `@asahi` packages and configuration this project builds on. The Fedora

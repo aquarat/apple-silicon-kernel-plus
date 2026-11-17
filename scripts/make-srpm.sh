@@ -7,8 +7,8 @@
 #   scripts/make-srpm.sh <package> <outdir>
 #   scripts/make-srpm.sh --list
 #
-# Packages: kernel apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus qemu-vmapple
-#           reims-vgpu-backend
+# Packages: kernel apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus mesa-coopmat
+#           qemu-vmapple reims-vgpu-backend
 #
 # Environment:
 #   CACHE_DIR      downloads and git checkouts (default: <repo>/.cache)
@@ -16,13 +16,17 @@
 #                  named in packages/kernel/kernel-plus.conf (sha256 checked)
 #   ASAHI_GIT      kernel only: fetch the Asahi commit from this git
 #                  repository (a local clone, say) instead of ASAHI_REPO
+#   MESA_COOPMAT_GIT  mesa-coopmat only: fetch its commit from this git
+#                  repository instead of github.com/aquarat/mesa (the tree
+#                  is checked against the spec either way)
 #   PREP_CHECK=1   kernel only: also run `rpmbuild -bp` (patches apply,
 #                  configs pass Fedora's checks?) before writing the SRPM;
 #                  needs the kernel's build tools, not its full BuildRequires
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-PACKAGES=(kernel apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus qemu-vmapple reims-vgpu-backend)
+PACKAGES=(kernel apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus mesa-coopmat qemu-vmapple
+          reims-vgpu-backend)
 CACHE_DIR=${CACHE_DIR:-$HERE/.cache}
 
 die() { echo "make-srpm: $*" >&2; exit 1; }
@@ -271,6 +275,35 @@ build_mesa() {
     finish "$spec"
 }
 
+# mesa-coopmat: aquarat/mesa (branch coopmat) at exactly mesa_commit, fetched
+# shallow (Mesa's history is large), refused unless its tree is mesa_tree and
+# its VERSION is mesa_version.
+build_mesa_coopmat() {
+    local spec="$top/SPECS/$pkg.spec" commit tree ver short g
+    command -v git >/dev/null || die "missing git"
+    cp "$HERE/packages/$pkg/$pkg.spec" "$spec"
+    commit=$(sed -n 's/^%global mesa_commit[[:space:]]\+//p' "$spec")
+    tree=$(sed -n 's/^%global mesa_tree[[:space:]]\+//p' "$spec")
+    ver=$(sed -n 's/^%global mesa_version[[:space:]]\+//p' "$spec")
+    [[ $commit =~ ^[0-9a-f]{40}$ ]] || die "mesa_commit in $pkg.spec is not a full commit id"
+    [[ $tree =~ ^[0-9a-f]{40}$ ]] || die "mesa_tree in $pkg.spec is not a full tree id"
+    short=${commit:0:12}
+    g="$CACHE_DIR/git/mesa-coopmat"
+    [ -d "$g/.git" ] || git init -q "$g"
+    git -C "$g" cat-file -e "$commit^{commit}" 2>/dev/null ||
+        git -C "$g" fetch -q --depth 1 "${MESA_COOPMAT_GIT:-https://github.com/aquarat/mesa.git}" "$commit" ||
+        die "fetch of mesa $commit failed"
+    [ "$(git -C "$g" rev-parse "$commit^{tree}")" = "$tree" ] ||
+        die "mesa $short: tree is not mesa_tree $tree"
+    [ "$(git -C "$g" show "$commit:VERSION")" = "$ver" ] ||
+        die "mesa $short: VERSION is $(git -C "$g" show "$commit:VERSION"), mesa_version says $ver"
+    log "Source0 mesa-coopmat-$short.tar.xz (commit $commit, tree $tree)"
+    git -C "$g" archive --prefix="mesa-coopmat-$short/" "$commit" |
+        xz -T0 -6 > "$top/SOURCES/mesa-coopmat-$short.tar.xz"
+    cp "$HERE/packages/$pkg/with-coopmat" "$HERE/packages/$pkg/README.md" "$top/SOURCES/"
+    finish "$spec"
+}
+
 # A clone of <url> in $CACHE_DIR/git/<name>, checked out at <commit>, clean.
 checkout_at() {
     local name=$1 url=$2 commit=$3 g="$CACHE_DIR/git/$1"
@@ -422,6 +455,7 @@ case $pkg in
 kernel) build_kernel ;;
 apple-avd|apple-ave|apple-silicon-thunderbolt) build_own ;;
 mesa-honeykrisp-plus) build_mesa ;;
+mesa-coopmat) build_mesa_coopmat ;;
 qemu-vmapple) build_qemu ;;
 reims-vgpu-backend) build_reims ;;
 esac
