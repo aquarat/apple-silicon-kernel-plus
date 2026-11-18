@@ -79,7 +79,8 @@ The kernel is `<Linux version>-<N>.asahiwip.plus<M>.fc44`:
 | this project, 7.3.1 | `7.3.1-900.asahiwip.plus1.fc44` | `7.3.1-900.asahiwip.plus1.fc44.aarch64+16k` |
 | this project, 7.3.1 with thunderbolt-net TSO for a lowered MSS | `7.3.1-900.asahiwip.plus2.fc44` | `7.3.1-900.asahiwip.plus2.fc44.aarch64+16k` |
 | this project, 7.3.1 with the independent PAuth patch | `7.3.1-900.asahiwip.plus3.fc44` | `7.3.1-900.asahiwip.plus3.fc44.aarch64+16k` |
-| this project now (7.3.1, PMP fabric/DRAM requests and the apple-ave vote through them, patches 0030-0034) | `7.3.1-900.asahiwip.plus4.fc44` | `7.3.1-900.asahiwip.plus4.fc44.aarch64+16k` |
+| this project, 7.3.1 with the PMP fabric/DRAM requests (patches 0030-0034) | `7.3.1-900.asahiwip.plus4.fc44` | `7.3.1-900.asahiwip.plus4.fc44.aarch64+16k` |
+| this project now (7.3.4; kept at `plus5` rather than `plus1` so the plus number keeps rising across the 7.3 line; sorts above `@asahi`'s `7.3.4-401.asahi`) | `7.3.4-900.asahiwip.plus5.fc44` | `7.3.4-900.asahiwip.plus5.fc44.aarch64+16k` |
 
 - The version is the Linux release the pinned Asahi commit is based on
   (`KERNEL_VERSION` in `packages/kernel/kernel-plus.conf`).

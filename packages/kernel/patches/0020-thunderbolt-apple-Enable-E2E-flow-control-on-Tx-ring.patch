@@ -1,8 +1,7 @@
-From 151a5b8149697e5965eadde64e58460e06e8d7c3 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Tue, 20 Oct 2026 15:39:07 +0000
-Subject: [PATCH 1/5] thunderbolt: apple: Enable E2E flow control on Tx rings
- too
+Subject: [PATCH] thunderbolt: apple: Enable E2E flow control on Tx rings too
 
 End-to-end flow control on the Apple NHI only works when it is enabled on
 both rings of a channel: the Rx ring returns credits to the remote end,
@@ -49,10 +48,10 @@ index 530008cc8..1e6d2e583 100644
  	anhi->nhi.ring_layout = &apple_nhi_ring_layout;
  	anhi->nhi.iobase = anhi->nhi_base;
 diff --git a/include/linux/thunderbolt.h b/include/linux/thunderbolt.h
-index 840115962..ce58caf40 100644
+index 2efeb03e9..52dbf5508 100644
 --- a/include/linux/thunderbolt.h
 +++ b/include/linux/thunderbolt.h
-@@ -511,6 +511,9 @@ void tb_service_properties_changed(struct tb_service *svc);
+@@ -512,6 +512,9 @@ void tb_service_properties_changed(struct tb_service *svc);
   * @going_away: The host controller device is about to disappear so when
   *		this flag is set, avoid touching the hardware anymore.
   * @iommu_dma_protection: An IOMMU will isolate external-facing ports.
@@ -62,7 +61,7 @@ index 840115962..ce58caf40 100644
   * @interrupt_work: Work scheduled to handle ring interrupt when no
   *		    MSI-X is used.
   * @hop_count: Number of rings (end point hops) supported by NHI.
-@@ -527,6 +530,7 @@ struct tb_nhi {
+@@ -533,6 +536,7 @@ struct tb_nhi {
  	struct tb_ring **rx_rings;
  	bool going_away;
  	bool iommu_dma_protection;
@@ -70,6 +69,3 @@ index 840115962..ce58caf40 100644
  	struct work_struct interrupt_work;
  	u32 hop_count;
  	unsigned long quirks;
--- 
-2.56.0
-

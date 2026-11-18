@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Wed, 18 Nov 2026 10:32:15 +0000
-Subject: [PATCH 32/34] interconnect: Export icc_get()
+Subject: [PATCH] interconnect: Export icc_get()
 
 icc_get() finds a path by node names. It is used only by the debugfs
 client today, but consumers whose device tree has no "interconnects"
@@ -64,6 +64,3 @@ index 75a32ad04..8d2526967 100644
  static inline struct icc_path *of_icc_get(struct device *dev,
  					  const char *name)
  {
--- 
-2.56.0
-

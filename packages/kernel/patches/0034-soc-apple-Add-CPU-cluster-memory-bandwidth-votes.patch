@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Wed, 18 Nov 2026 10:34:18 +0000
-Subject: [PATCH 34/34] soc: apple: Add CPU cluster memory-bandwidth votes
+Subject: [PATCH] soc: apple: Add CPU cluster memory-bandwidth votes
 
 With the PMP running, a streaming CPU gets the lowest fabric and DRAM
 controller levels unless its cluster asks for more: on an M1 Max, CPU
@@ -595,6 +595,3 @@ index 000000000..b4177d53b
 +MODULE_SOFTDEP("pre: apple-soc-cpufreq");
 +MODULE_DESCRIPTION("Apple SoC CPU cluster memory-bandwidth votes");
 +MODULE_LICENSE("Dual MIT/GPL");
--- 
-2.56.0
-

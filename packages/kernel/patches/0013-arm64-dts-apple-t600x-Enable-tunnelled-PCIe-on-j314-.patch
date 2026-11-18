@@ -1,8 +1,8 @@
-From fef9d6ce8da6c45de7735c5c5473904fe24f00ef Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Tue, 20 Oct 2026 09:33:24 +0000
-Subject: [PATCH 4/4] arm64: dts: apple: t600x: Enable tunnelled PCIe on j314,
- j316 and j375
+Subject: [PATCH] arm64: dts: apple: t600x: Enable tunnelled PCIe on j314, j316
+ and j375
 
 Enable the tunnelled PCIe controllers of the USB4 ports (0-2 on the
 MacBook Pros, 0-3 on the Mac Studio) and add the usb4_N_pcie aliases the
@@ -185,6 +185,3 @@ index 000000000..04eceb1c4
 +&apciec3 {
 +	status = "okay";
 +};
--- 
-2.56.0
-

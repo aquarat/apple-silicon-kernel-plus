@@ -1,9 +1,9 @@
 # packages/kernel
 
 **Experimental.** The kernel is built from the Asahi Linux kernel tree's
-`asahi-wip` branch (Linux 7.3.1, commit c2e6784b008c of 2026-11-05), not
-from a kernel `@asahi` has released: there is no `asahi-7.3` tag and no
-`@asahi` 7.3 kernel yet. `asahi-wip` is Asahi's integration branch: it
+`asahi-wip` branch (Linux 7.3.4, commit 201be96df565), not from a kernel
+`@asahi` has released (`@asahi` ships 7.3.4-401.asahi; this project's
+7.3.4-900.asahiwip.plus5 sorts above it, so dnf keeps this COPR's kernel). `asahi-wip` is Asahi's integration branch: it
 carries work that is not in any Fedora Asahi Remix kernel yet. (7.2.15 was
 built from the `asahi-7.2.15-2` release tag instead.) The commit pinned here
 has not had the testing a `@asahi` release gets. If you want the stock kernel's stability, do not use this
@@ -21,8 +21,8 @@ grub entries).
 
 | | what | pinned by |
 |---|---|---|
-| Source0 `linux-7.3.1.tar.xz` | the kernel.org tarball | `LINUX_TARBALL_URL`, `LINUX_TARBALL_SHA256` |
-| `kernel.spec`, scripts, other sources | Fedora's `kernel-7.3.1-200.fc44` SRPM from Koji | `FEDORA_SRPM_URL`, `FEDORA_SRPM_SHA256` |
+| Source0 `linux-7.3.4.tar.xz` | the kernel.org tarball | `LINUX_TARBALL_URL`, `LINUX_TARBALL_SHA256` |
+| `kernel.spec`, scripts, other sources | Fedora's `kernel-7.3.4-200.fc44` SRPM from Koji | `FEDORA_SRPM_URL`, `FEDORA_SRPM_SHA256` |
 | `patch-7.2-redhat.patch` | generated: the [AsahiLinux/linux](https://github.com/AsahiLinux/linux) tree at `ASAHI_COMMIT` plus Fedora's own `patch-7.2-redhat.patch`, as one diff against the tarball | `ASAHI_COMMIT` (a full commit id: the content) |
 | `linux-kernel-test.patch` | `patches/*.patch`, in file name order | this directory |
 | `kernel-*-fedora.config` | Fedora's configs with `configs/asahi-*.config` and `configs/plus-*.config` applied | this directory |
@@ -30,7 +30,7 @@ grub entries).
 This is the layout of `@asahi`'s own SRPMs: their `patch-<major>-redhat.patch`
 is the Asahi tree plus Fedora's patch, and their `kernel.spec` is
 Fedora's with a few settings changed. `make-srpm.sh` makes the same
-changes to Fedora's 7.3.1 spec:
+changes to Fedora's 7.3.4 spec:
 
 - `%define _with_arm64_16k 1`: the 16k variant, which Fedora does not build;
 - `%define pkgrelease`/`specrelease`: this project's release
@@ -66,14 +66,14 @@ commit (docs/maintainer-guide.md).
 |---|---|---|
 | 0001 | KVM: handle Apple's PAuth virtualization state (a random VM key per VM, APSTS, and per-vCPU APCTL, KERNKEYLO/HI exposed to user space). Needed by macOS guests on QEMU's `vmapple` machine. Only acts on M1 and M2 CPUs, under VHE on bare metal | always on |
 | 0002 | KVM: decode and emulate MMIO loads/stores that fault without an instruction syndrome (XNU's pre-indexed store to the GIC) | **on**; `kvm.emulate_nisv_ldst=0` turns it off |
-| 0003 | atlantic: enable the AQC113 (ATL2) unicast/multicast list filters relative to the firmware's filter base index. Asahi's own fix keeps the station MAC filter on (unicast RX on the Mac Studio's built-in 10GbE), but still switches list entries off unless the list is longer than the base index, so multicast is lost unless the port is promiscuous | fix |
 
-0001, 0002 and 0003 are this project's own work. 0001 is an independent
+0001 and 0002 are this project's own work. 0001 is an independent
 implementation of what Anees Iqbal first showed macOS guests need (see
-`CREDITS.md` and `docs/kvm-pauth-provenance.md`); on 7.3.1 it is the
-7.2.11 `plus4` patch with its context rebased. Up to 7.2.11, 0003 was a
-larger patch that also kept the station MAC filter on; Asahi's tree does
-that itself now. All three are in `git format-patch` form against the
+`CREDITS.md` and `docs/kvm-pauth-provenance.md`); on 7.3.x it is the
+7.2.11 `plus4` patch with its context rebased. 0003 (the AQC113 list
+filters relative to the firmware's base index) is gone from 7.3.4: the
+7.3.4 tree has its own `hw_atl2_hw_packet_filter_set()`, which enables the
+list entries relative to the base index. Both patches are in `git format-patch` form against the
 tarball plus `patch-7.3-redhat.patch`; docs/maintainer-guide.md
 shows how to rebase them. (7.2.11 `plus5` also carried 0004, a backport
 of Asahi's fix for GPU kernel-VM buffers that were never freed; 7.3.1's

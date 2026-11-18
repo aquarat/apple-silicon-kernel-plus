@@ -128,7 +128,7 @@ index 4370d91ff..f24907db7 100644
 +
  #endif
 diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
-index cd9b9d246..a9bcf7b4f 100644
+index d7caf8c4a..89e1d0cdb 100644
 --- a/arch/arm64/include/asm/kvm_host.h
 +++ b/arch/arm64/include/asm/kvm_host.h
 @@ -414,6 +414,12 @@ struct kvm_arch {
@@ -156,7 +156,7 @@ index cd9b9d246..a9bcf7b4f 100644
  	/* Memory Tagging Extension registers */
  	RGSR_EL1,	/* Random Allocation Tag Seed Register */
  	GCR_EL1,	/* Tag Control Register */
-@@ -1430,6 +1441,18 @@ static inline bool kvm_system_needs_idmapped_vectors(void)
+@@ -1429,6 +1440,18 @@ static inline bool kvm_system_needs_idmapped_vectors(void)
  	return cpus_have_final_cap(ARM64_SPECTRE_V3A);
  }
  
@@ -237,7 +237,7 @@ index aee7571fb..5f9cf8f0a 100644
  };
  
 diff --git a/arch/arm64/kvm/arm.c b/arch/arm64/kvm/arm.c
-index 0576c2022..b4eb84d56 100644
+index 9b773ab0b..b0831d470 100644
 --- a/arch/arm64/kvm/arm.c
 +++ b/arch/arm64/kvm/arm.c
 @@ -21,6 +21,8 @@
@@ -269,7 +269,7 @@ index 0576c2022..b4eb84d56 100644
  }
  
  static bool kvm_has_full_ptr_auth(void)
-@@ -3030,6 +3038,24 @@ void kvm_arch_irq_bypass_start(struct irq_bypass_consumer *cons)
+@@ -3041,6 +3049,24 @@ void kvm_arch_irq_bypass_start(struct irq_bypass_consumer *cons)
  	kvm_arm_resume_guest(irqfd->kvm);
  }
  
@@ -294,7 +294,7 @@ index 0576c2022..b4eb84d56 100644
  /* Initialize Hyp-mode and memory mappings on all CPUs */
  static __init int kvm_arm_init(void)
  {
-@@ -3089,6 +3115,8 @@ static __init int kvm_arm_init(void)
+@@ -3100,6 +3126,8 @@ static __init int kvm_arm_init(void)
  	if (err)
  		goto out_hyp;
  
@@ -379,7 +379,7 @@ index 0c4ef1ce3..93e67e954 100644
  	__sysreg32_save_state(vcpu);
  
 diff --git a/arch/arm64/kvm/sys_regs.c b/arch/arm64/kvm/sys_regs.c
-index a2f4e769a..e53d6e761 100644
+index cac62ed43..669e62997 100644
 --- a/arch/arm64/kvm/sys_regs.c
 +++ b/arch/arm64/kvm/sys_regs.c
 @@ -19,6 +19,7 @@
@@ -436,6 +436,3 @@ index ed7f6492a..7c566d45e 100644
  HAS_PMUV3
  HAS_S1PIE
  HAS_S1POE
--- 
-2.56.0
-
