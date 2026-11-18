@@ -32,11 +32,11 @@ not run.
 Assisted-by: Claude:claude-opus-5-5
 Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
 ---
- drivers/pmdomain/apple/pmp-report.c | 172 +++++++++++++++++++++++++++-
- 1 file changed, 170 insertions(+), 2 deletions(-)
+ drivers/pmdomain/apple/pmp-report.c | 190 +++++++++++++++++++++++++++-
+ 1 file changed, 188 insertions(+), 2 deletions(-)
 
 diff --git a/drivers/pmdomain/apple/pmp-report.c b/drivers/pmdomain/apple/pmp-report.c
-index b1194f0eb..379a85a19 100644
+index b1194f0eb..a258de8c0 100644
 --- a/drivers/pmdomain/apple/pmp-report.c
 +++ b/drivers/pmdomain/apple/pmp-report.c
 @@ -7,11 +7,16 @@
@@ -96,7 +96,7 @@ index b1194f0eb..379a85a19 100644
  	struct apple_pmp_report *rep = dev_get_drvdata(ent->dev->parent);
  	u64 bit_val = BIT_ULL(ent->id);
  	u64 val;
-@@ -301,6 +325,142 @@ static int apple_pmp_report_set_state(struct generic_pm_domain *genpd, bool enab
+@@ -301,6 +325,160 @@ static int apple_pmp_report_set_state(struct generic_pm_domain *genpd, bool enab
  		50000);
  }
  
@@ -201,6 +201,21 @@ index b1194f0eb..379a85a19 100644
 +	return NOTIFY_DONE;
 +}
 +
++static void apple_pmp_report_bound_remove(void *data)
++{
++	struct apple_pmp_report_entry *ent = data;
++
++	unregister_reboot_notifier(&ent->reboot_nb);
++	unregister_pm_notifier(&ent->pm_nb);
++	bus_unregister_notifier(&platform_bus_type, &ent->bus_nb);
++	apple_pmp_report_bound_off(ent, &ent->bound, false);
++}
++
++static void apple_pmp_report_put_node(void *data)
++{
++	of_node_put(data);
++}
++
 +static int apple_pmp_report_bound_probe(struct apple_pmp_report_entry *ent)
 +{
 +	struct platform_device *cdev;
@@ -219,6 +234,9 @@ index b1194f0eb..379a85a19 100644
 +		return ret;
 +	register_pm_notifier(&ent->pm_nb);
 +	register_reboot_notifier(&ent->reboot_nb);
++	ret = devm_add_action_or_reset(ent->dev, apple_pmp_report_bound_remove, ent);
++	if (ret)
++		return ret;
 +
 +	/* the consumer may have bound already */
 +	cdev = of_find_device_by_node(ent->consumer);
@@ -239,16 +257,16 @@ index b1194f0eb..379a85a19 100644
  static int apple_pmp_report_entry_power_on(struct generic_pm_domain *genpd)
  {
  	return apple_pmp_report_set_state(genpd, true);
-@@ -334,6 +494,14 @@ static int apple_pmp_report_entry_probe(struct platform_device *pdev)
+@@ -334,6 +512,14 @@ static int apple_pmp_report_entry_probe(struct platform_device *pdev)
  	if (ret < 0)
  		return dev_err_probe(dev, ret, "missing label property\n");
  
 +	ent->consumer = of_parse_phandle(node, "apple,report-while-bound", 0);
 +	if (ent->consumer) {
-+		ret = apple_pmp_report_bound_probe(ent);
++		ret = devm_add_action_or_reset(dev, apple_pmp_report_put_node, ent->consumer);
 +		if (ret)
-+			of_node_put(ent->consumer);
-+		return ret;
++			return ret;
++		return apple_pmp_report_bound_probe(ent);
 +	}
 +
  	if (of_property_read_bool(node, "apple,always-on")) {
