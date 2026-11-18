@@ -53,12 +53,15 @@ in all-multicast mode.
   CI compile check (#10) did not actually compile it at first, because the
   patched file is built by its parent directory's Makefile; #13 fixed that,
   and the check now fails if a touched C file produces no object.
+- On hardware since 7.3.1 `plus3` (2026-11-17): the built-in 10GbE port of
+  an M1 Max Mac Studio is the uplink of a bridge, with promiscuous mode
+  off, and passes that machine's network checks after boot. Multicast was
+  not tested specifically.
 
 ## Limitations and open items
 
-- Not yet run on an AQC113 port with 7.3.1 (listed in
-  [consolidation-plan.md](consolidation-plan.md), "Still to test on
-  hardware").
+- No specific multicast test on 7.3.1 yet (the case the patch fixes);
+  unicast and bridging work.
 
 ## Hardware
 

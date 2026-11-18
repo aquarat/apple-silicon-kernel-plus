@@ -76,12 +76,15 @@ On an M1 Max (t6001), 7.2.11 with this patch (`plus4`):
 
 The 7.3.1 rebase (#6) changed context in two hunks only (`struct kvm_arch`
 and `arch/arm64/tools/cpucaps`); it is build-tested (the KVM and arm64
-objects compile, the new symbols are present). PR #9 lists a macOS guest on
-7.3.1 as still to do.
+objects compile, the new symbols are present). After #9 merged, on an M1
+Ultra Mac Studio with 7.3.1 `plus3`, a macOS 26.4 and a macOS 13.6 guest
+each ran a CI job to completion (exit 0).
 
 ## Limitations and open items
 
-- Not run on 7.3.1 with a macOS guest yet (build-tested only).
+- On 7.3.1 only the guest jobs above have run; the full test list above
+  (several vCPU counts, two guests at once, the negative control) was run on
+  7.2.11.
 - nVHE paths not tested (`kvm-arm.mode=nvhe` is rejected on M1 Max); no M2
   hardware tested.
 - Migration of a guest that uses Apple-mode keys of its own into a new VM

@@ -45,7 +45,10 @@ the sender is already at the lower MSS, so TCP stalls at a congestion
 window of about two segments. Uploads from a Thunderbolt peer to a service
 behind an overlay network with MTU 1450 ran at under 1 MB/s instead of
 about 150 MB/s, with a "fragmentation needed" message for nearly every
-segment.
+segment. One such HTTPS upload, traced over 20 s, showed a congestion
+window of 2, 348 retransmits in 4,353 segments and 450 "fragmentation
+needed" messages; the peer had lowered its MSS to 1398 for the 1450-byte
+hop, but the bridging Mac re-segmented at 1448.
 
 ## Design and alternatives
 
@@ -77,15 +80,33 @@ It works with GRO on or off on the receiver.
 
 0027 (#2, #3): full 16k RPM build of the 7.2.11 tree, the thunderbolt-net
 module compiled cleanly with W=1 against 7.3.1, checkpatch clean. Hardware
-validation (a sub-1500-MTU path, an MSS clamp, MTU 1500 forwarding
-throughput) was in progress when they merged; its results are not recorded
-in this repository.
+validation was done after the PRs merged, with 7.3.1 `plus3` (0026 and 0027)
+on an M1 Mac mini whose only network is a Thunderbolt cable to an M1 Max
+Mac Studio that bridges it to the LAN:
+
+| test | before (7.2.11 `plus3`, 0026 only) | after (7.3.1 `plus3`) |
+|---|---|---|
+| 256 MiB HTTPS upload to a service behind an overlay network (MTU 1450) | 0.96 MB/s | 171.7 MB/s |
+| a flow with its MSS clamped to 1300, segments as they arrive past the bridge | 1448 bytes | 1288 bytes, IPv4 and IPv6 |
+| 1 GiB transfers, SHA-256 checked, both directions | | intact |
+
+- The same MSS and SHA-256 checks passed on a second M1 Mac mini and on an
+  M2 Mac mini.
+- No regression at full MSS (10 s iperf3, a peer on 7.2.11 `plus3` and one
+  on 7.3.1 `plus3` side by side): to the bridging Mac 17.3 against 17.4
+  Gb/s, to an M1 Ultra Mac Studio 12.0-12.5 against 12.5-12.6 Gb/s, 0-6
+  retransmits; peer to peer through the bridge 12.8 Gb/s; M2 Mac mini to the
+  bridging Mac 19.4 Gb/s.
+- After the first machine, the kernel went to four more machines (the
+  second M1 Mac mini, the M2 Mac mini, the M1 Ultra and the bridging M1 Max)
+  with no regressions; TSO no longer has to be turned off on any of them.
 
 ## Limitations and open items
 
-- 0027's hardware validation results are not recorded here (see Testing);
-  [consolidation-plan.md](consolidation-plan.md) lists Thunderbolt
-  networking with 0027 on 7.3.1 as still to be run.
+- Covered by the measurements: transmissions from the peers. The bridging
+  Mac's own transmissions with 0027 (for example downloads forwarded into a
+  bridged peer) were not measured separately, and 0026's 19+ Gb/s
+  forwarding into a veth was not re-measured on 7.3.1.
 - Every sender needs 0027; a peer without it (macOS, another OS) can still
   send TSO packets with a lowered MSS that this receiver re-segments at its
   own MTU.

@@ -51,16 +51,15 @@ hit this path: their MMIO accesses carry a syndrome.
 Recorded in the commit message: kernel `7.1.13-401.asahi` on an M1 Max
 (t6001), macOS 13 and 26 guests; then rebased to 7.2.11 with the default
 changed to on. The macOS guest tests of [kvm-apple-pauth.md](kvm-apple-pauth.md)
-(7.2.11, macOS 13.6 and 26.4) ran with it on. No separate measurements were
-recorded.
+(7.2.11, macOS 13.6 and 26.4) ran with it on, and so did the macOS 26.4 and
+13.6 guest jobs on an M1 Ultra Mac Studio with 7.3.1 `plus3`. No separate
+measurements were recorded.
 
 ## Limitations and open items
 
 - Only single-register LDR/STR immediate forms on general-purpose
   registers; pairs, SIMD/FP registers and other addressing modes still fail
   as on a stock kernel.
-- Not yet run with a macOS guest on 7.3.1 (the PAuth patch on 7.3.1 has the
-  same open item).
 
 ## Hardware
 

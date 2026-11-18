@@ -56,14 +56,28 @@
 - 0005 (#12): compiles with W=1 and no warnings against 7.3.1 and 7.2.11
   headers; SRPM builds, rpmlint clean; `scripts/rebase-avd.sh` against the
   7.3.1 `plus3` kernel gives the same in-tree driver, and 0001-0004 apply
-  unchanged. A V4L2 decode smoke test with firmware was planned for the
-  rollout; its result is not recorded here.
+  unchanged.
+- dkms-apple-avd 7.3.1.2 (0001-0005) on 7.3.1 `plus3`, after #12 merged:
+  - an M1 Pro MacBook Pro running a network video recorder workload
+    decoded H.264, HEVC and a camera clip bit-exact against software
+    decode, then ran a 15 min soak with five cameras at 5.04 fps and no
+    skipped frames;
+  - an M1 Ultra Mac Studio decoded H.264 and HEVC bit-exact against
+    software decode;
+  - an M2 Mac mini, whose installed firmware has neither the config block
+    nor a `CODECS:` trailer, took 0005's last fallback: it logged the new
+    warning "Firmware without config block or codec list" and announced
+    the same codecs as before;
+  - DKMS built the module for the installed 7.3.1 kernels, and an M1 Max
+    Mac Studio loaded it from DKMS's `extra/` directory.
 
 ## Limitations and open items
 
 - t8112 (M2): H.264 works, HEVC times out (open).
-- The DKMS builds on the built 7.3.1 kernel and the V4L2 smoke test are
-  listed as still to do in [consolidation-plan.md](consolidation-plan.md).
+- [consolidation-plan.md](consolidation-plan.md) still lists the DKMS
+  builds on 7.3.1 as to do; the results above cover them.
+- 0001's cacheable buffers were measured on 7.1/7.2; the 7.3.1 bit-exact
+  checks do not say which buffer mode the client used.
 - 0001 helps only clients that ask for non-coherent buffers (ffmpeg needs
   to request `V4L2_MEMORY_FLAG_NON_COHERENT`).
 

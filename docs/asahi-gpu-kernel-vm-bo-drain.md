@@ -38,15 +38,35 @@ for the 7.2 line.
 
 ## Testing
 
-Recorded in #2: a full 16k RPM build of the tree; build-tested. A runtime
-A/B (GEM reproducer, model loads) was in progress when #2 merged
-([consolidation-plan.md](consolidation-plan.md)); its results are not
-recorded in this repository.
+#2: a full 16k RPM build of the tree. A runtime A/B finished after #2
+merged, on an M1 Max MacBook Pro, between the installed 7.2.11 `plus1` and
+a test build of the same tree with only this backport added:
+
+- **Reproducer** (eight 16 MiB BOs, a timestamp bind of one page, then
+  close or an explicit unbind): unpatched, exactly 128 MiB of shmem stayed
+  allocated and unevictable after the process exited; patched, 0 in both
+  cases. 200 process lifetimes with 1600 BOs: no change in cgroup or global
+  memory.
+- **llama.cpp** (Vulkan, a small 0.5B Q4 model, six model loads):
+  unpatched, 24,444,928 bytes stayed retained even after the driver's normal
+  context cleanup; patched, only the last lazily destroyed context (about
+  3.9 MB) remained, and it went to 0 at the next cleanup. Global memory
+  returned to its warm baseline.
+- Caveat: the test build used a different Rust compiler release from the
+  installed kernel, so it is not a bit-identical toolchain comparison.
+
+On 7.3.1 `plus3`, whose Asahi base has the upstream fix, an M1 Max Mac
+Studio showed the same results: the timestamp probe retained nothing, and
+a llama.cpp model load and exit left no unevictable memory behind (7.2.11
+without the fix kept about 239 MB per load).
 
 ## Limitations and open items
 
-- Runtime results are not recorded here (see Testing).
+- The A/B tested a 7.2.11 `plus1` build with only this patch, not the
+  `plus5` package itself.
 - Only the 7.2.11 line (`kernel-7.2`) carries it.
+- A process that exits right after using Vulkan still defers destroying
+  its last context by design; that is not this leak.
 
 ## Hardware
 

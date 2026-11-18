@@ -129,8 +129,10 @@ in a network namespace, 20 Gb/s x2, MTU 65522, iperf3):
 - Known USB4 link drop under heavy load shortly after a reconnect (see
   [thunderbolt-pcie-apciec.md](thunderbolt-pcie-apciec.md)).
 - The Rx ring size is a compile-time constant (256).
-- Thunderbolt networking on 7.3.1 is still to be run on hardware
-  ([consolidation-plan.md](consolidation-plan.md)).
+- On 7.3.1 `plus3` the star network above was re-checked (every peer on
+  a 20 Gb/s x2 link, 17-19 Gb/s to the bridging Mac; see
+  [thunderbolt-net-tso-forwarding.md](thunderbolt-net-tso-forwarding.md#testing));
+  the single-machine loopback numbers were not re-measured.
 
 ## Hardware
 

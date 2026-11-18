@@ -84,6 +84,10 @@ PMP vote, 1080p H.264 runs at about 194 fps on one encoder.
 - 0.99.6-3, M1 Max, 120 frames 1080p H.264: through the provider 2.49 /
   2.52 / 2.43 s, direct slot write 2.48 / 2.49 s, no vote 3.93 s; output
   identical (PSNR 44.22 dB).
+- 0.99.6 on 7.3.1 `plus3` (DKMS): an M1 Ultra encoded H.264 and HEVC,
+  300 of 300 frames, at about 48 dB; an M1 Pro, 300 of 300 frames at
+  46-47 dB, 1080p H.264 at 5.18 ms per frame with the PMP vote (unchanged
+  from the 7.1 kernel it replaced).
 - Per-SoC evidence (compliance, soak, reloads, hang recovery, PSNR) is in
   the package README's [Status](../packages/apple-ave/README.md#status)
   and the upstream docs it cites (53, 84, 87-98).
