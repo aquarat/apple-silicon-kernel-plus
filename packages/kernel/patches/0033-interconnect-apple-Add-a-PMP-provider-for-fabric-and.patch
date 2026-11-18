@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Wed, 18 Nov 2026 10:32:15 +0000
-Subject: [PATCH 33/34] interconnect: apple: Add a PMP provider for fabric and
- DRAM requests
+Subject: [PATCH] interconnect: apple: Add a PMP provider for fabric and DRAM
+ requests
 
 On t600x the PMP sets the fabric and DRAM controller (DCS) performance
 states, from its own monitors and from the agents' DVFS requests in its
@@ -406,6 +406,3 @@ index 000000000..54597037d
 +#define APPLE_PMP_ICC_TAG_SOC(l)	((l) & APPLE_PMP_ICC_TAG_SOC_MASK)
 +
 +#endif /* _LINUX_SOC_APPLE_PMP_ICC_H_ */
--- 
-2.56.0
-

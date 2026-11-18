@@ -1,7 +1,7 @@
-From d5bb7ff0b68e26949c1513f97be37414450c4c38 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Tue, 20 Oct 2026 09:33:24 +0000
-Subject: [PATCH 3/4] arm64: dts: apple: t600x: Add tunnelled PCIe controllers
+Subject: [PATCH] arm64: dts: apple: t600x: Add tunnelled PCIe controllers
 
 Add the tunnelled PCIe root complexes of USB4 ports 0-3 of die 0 and their
 DARTs, disabled. Boards enable the ports they wire up.
@@ -274,6 +274,3 @@ index 000000000..66d378dbe
 +		};
 +	};
 +};
--- 
-2.56.0
-

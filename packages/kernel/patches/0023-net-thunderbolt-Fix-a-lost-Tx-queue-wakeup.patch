@@ -1,7 +1,7 @@
-From 0d79590cfd974900c6750af352b025134e7a7ae6 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Tue, 20 Oct 2026 18:56:44 +0000
-Subject: [PATCH 4/5] net: thunderbolt: Fix a lost Tx queue wakeup
+Subject: [PATCH] net: thunderbolt: Fix a lost Tx queue wakeup
 
 tbnet_start_xmit() stops the queue when there are not enough free Tx
 buffers, and tbnet_tx_callback() wakes it when it returns a buffer and
@@ -30,7 +30,7 @@ Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
  1 file changed, 12 insertions(+), 1 deletion(-)
 
 diff --git a/drivers/net/thunderbolt/main.c b/drivers/net/thunderbolt/main.c
-index 071aff21b..406977d0e 100644
+index 777fc256e..dd0290048 100644
 --- a/drivers/net/thunderbolt/main.c
 +++ b/drivers/net/thunderbolt/main.c
 @@ -582,6 +582,8 @@ static void tbnet_tx_callback(struct tb_ring *ring, struct ring_frame *frame,
@@ -60,6 +60,3 @@ index 071aff21b..406977d0e 100644
  	}
  
  	frames[frame_index] = tbnet_get_tx_buffer(net);
--- 
-2.56.0
-

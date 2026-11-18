@@ -1,7 +1,7 @@
-From c44bb592066a7baad1e103458d791e442545a09d Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Tue, 20 Oct 2026 09:33:23 +0000
-Subject: [PATCH 2/4] PCI: apple: Add driver for the T600x tunnelled PCIe
+Subject: [PATCH] PCI: apple: Add driver for the T600x tunnelled PCIe
  controllers
 
 Add a host driver for the PCIe root complexes ("APCIEC") behind the
@@ -42,10 +42,10 @@ Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
  create mode 100644 drivers/pci/controller/pcie-apple-apciec.c
 
 diff --git a/MAINTAINERS b/MAINTAINERS
-index 9d844d031..55a37d22e 100644
+index d2db0b76a..c0c6918ca 100644
 --- a/MAINTAINERS
 +++ b/MAINTAINERS
-@@ -2643,6 +2643,7 @@ F:	drivers/mfd/macsmc.c
+@@ -2692,6 +2692,7 @@ F:	drivers/mfd/macsmc.c
  F:	drivers/nvme/host/apple.c
  F:	drivers/nvmem/apple-efuses.c
  F:	drivers/nvmem/apple-spmi-nvmem.c
@@ -54,7 +54,7 @@ index 9d844d031..55a37d22e 100644
  F:	drivers/pinctrl/pinctrl-apple-gpio.c
  F:	drivers/power/reset/macsmc-reboot.c
 diff --git a/drivers/pci/controller/Kconfig b/drivers/pci/controller/Kconfig
-index 420db1255..6be765bff 100644
+index d05052984..ab29f358f 100644
 --- a/drivers/pci/controller/Kconfig
 +++ b/drivers/pci/controller/Kconfig
 @@ -55,6 +55,22 @@ config PCIE_APPLE
@@ -81,10 +81,10 @@ index 420db1255..6be765bff 100644
  	bool "ARM Versatile PB PCI controller"
  	depends on ARCH_VERSATILE || COMPILE_TEST
 diff --git a/drivers/pci/controller/Makefile b/drivers/pci/controller/Makefile
-index ac8db283f..10609ba6b 100644
+index d478743b5..52d4c5ac8 100644
 --- a/drivers/pci/controller/Makefile
 +++ b/drivers/pci/controller/Makefile
-@@ -39,6 +39,7 @@ obj-$(CONFIG_PCIE_BRCMSTB) += pcie-brcmstb.o
+@@ -40,6 +40,7 @@ obj-$(CONFIG_PCIE_BRCMSTB) += pcie-brcmstb.o
  obj-$(CONFIG_PCI_LOONGSON) += pci-loongson.o
  obj-$(CONFIG_PCIE_HISI_ERR) += pcie-hisi-error.o
  obj-$(CONFIG_PCIE_APPLE) += pcie-apple.o
@@ -1275,6 +1275,3 @@ index 000000000..99601c982
 +
 +MODULE_DESCRIPTION("Apple T600x tunnelled PCIe (USB4/Thunderbolt) host driver");
 +MODULE_LICENSE("GPL");
--- 
-2.56.0
-

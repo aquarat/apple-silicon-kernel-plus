@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Wed, 18 Nov 2026 10:29:30 +0000
-Subject: [PATCH 30/34] pmdomain: apple: pmp-report: Use a 64-bit shift for the
- entry bit
+Subject: [PATCH] pmdomain: apple: pmp-report: Use a 64-bit shift for the entry
+ bit
 
 The PS-REQ/PS-ACK words are 64 bits wide, but the entry's bit was made
 with "1 << ent->id", an int shift. That is undefined for ids of 31 and
@@ -28,6 +28,3 @@ index 39a10a0b6..2d60a4a48 100644
  	u64 val;
  	unsigned long flags;
  
--- 
-2.56.0
-

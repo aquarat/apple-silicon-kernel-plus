@@ -1,8 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Wed, 18 Nov 2026 10:30:41 +0000
-Subject: [PATCH 31/34] pmdomain: apple: pmp-report: Add a DVFS request
- interface
+Subject: [PATCH] pmdomain: apple: pmp-report: Add a DVFS request interface
 
 Besides the power-state bitmaps, the PMP's shared dashboard holds one
 64-bit DVFS request per SoC agent: the SoC level, four fabric levels,
@@ -287,6 +286,3 @@ index 000000000..aba08e148
 +#endif
 +
 +#endif /* _LINUX_SOC_APPLE_PMP_REPORT_H_ */
--- 
-2.56.0
-

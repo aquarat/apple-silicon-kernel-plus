@@ -1,7 +1,7 @@
-From b74e4aa29245f725e37367bfc73839f4f7dfddbd Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Tue, 20 Oct 2026 18:24:06 +0000
-Subject: [PATCH 5/5] net: thunderbolt: Use a page pool for Rx buffers
+Subject: [PATCH] net: thunderbolt: Use a page pool for Rx buffers
 
 Every received ThunderboltIP frame (at most 4 KiB) takes a freshly
 allocated page that is DMA mapped before it goes on the Rx ring and
@@ -62,7 +62,7 @@ index e127848c8..a2e574bec 100644
  	  Select this if you want to create network between two computers
  	  over a USB4 and Thunderbolt cables. The driver supports Apple
 diff --git a/drivers/net/thunderbolt/main.c b/drivers/net/thunderbolt/main.c
-index 406977d0e..a05bb1a91 100644
+index dd0290048..210a0cbd6 100644
 --- a/drivers/net/thunderbolt/main.c
 +++ b/drivers/net/thunderbolt/main.c
 @@ -23,6 +23,7 @@
@@ -215,6 +215,3 @@ index 406977d0e..a05bb1a91 100644
  
  	tb_xdomain_release_out_hopid(net->xd, net->local_transmit_path);
  	tb_ring_free(net->tx_ring.ring);
--- 
-2.56.0
-

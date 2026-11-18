@@ -1,4 +1,4 @@
-From 8c3af5caf99b813f4a23ee29cce68ec73ef45e3b Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Tue, 17 Nov 2026 14:50:13 +0000
 Subject: [PATCH] net: thunderbolt: Segment TSO packets the receiver would cut
@@ -41,7 +41,7 @@ Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
  1 file changed, 54 insertions(+), 2 deletions(-)
 
 diff --git a/drivers/net/thunderbolt/main.c b/drivers/net/thunderbolt/main.c
-index 289b1766e..e509bac5d 100644
+index 0f1fdfe45..5e338b7d4 100644
 --- a/drivers/net/thunderbolt/main.c
 +++ b/drivers/net/thunderbolt/main.c
 @@ -837,8 +837,16 @@ static bool tbnet_check_frame(struct tbnet *net, const struct tbnet_frame *tf,
@@ -118,6 +118,3 @@ index 289b1766e..e509bac5d 100644
  	.ndo_set_mac_address = eth_mac_addr,
  	.ndo_get_stats64 = tbnet_get_stats64,
  };
--- 
-2.56.0
-

@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Sat, 10 Oct 2026 12:00:00 +0000
-Subject: [PATCH 2/3] KVM: arm64: emulate MMIO load/store-immediate aborts
- without a syndrome
+Subject: [PATCH] KVM: arm64: emulate MMIO load/store-immediate aborts without
+ a syndrome
 
 XNU (macOS) programs the GIC redistributor with a pre-indexed store
 ("str w9, [x8, #128]!"). The CPU reports such stage-2 aborts without a
@@ -32,10 +32,10 @@ Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
  3 files changed, 103 insertions(+)
 
 diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
-index 076e4900a..080f63070 100644
+index 89e1d0cdb..af0eaf940 100644
 --- a/arch/arm64/include/asm/kvm_host.h
 +++ b/arch/arm64/include/asm/kvm_host.h
-@@ -428,6 +428,7 @@ struct kvm_vcpu_fault_info {
+@@ -440,6 +440,7 @@ struct kvm_vcpu_fault_info {
  	u64 far_el2;		/* Hyp Fault Address Register */
  	u64 hpfar_el2;		/* Hyp IPA Fault Address Register */
  	u64 disr_el1;		/* Deferred [SError] Status Register */

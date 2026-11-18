@@ -1,4 +1,4 @@
-From 29559001a0674df931c821ba516d7744cb0538a7 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: aquarat <3090997+aquarat@users.noreply.github.com>
 Date: Tue, 20 Oct 2026 20:57:23 +0000
 Subject: [PATCH] thunderbolt: apple: Derive a per-machine host router UID
@@ -183,6 +183,3 @@ index 1e6d2e583..229c3ea16 100644
  	cap_apple = tb_switch_find_vse_cap(anhi->tb->root_switch, TB_VSE_CAP_APPLE);
  
  	if (cap_apple < 0) {
--- 
-2.56.0
-
