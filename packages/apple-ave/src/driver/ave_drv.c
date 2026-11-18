@@ -1019,6 +1019,21 @@ static int ave_pmp_vote_icc(struct ave_device *ave, u64 val)
 }
 
 /*
+ * Give the interconnect path back, which also withdraws its request. Done on
+ * every power-off, clean or not: the request is only a clock floor, and a
+ * path left behind by an unclean teardown would keep the encoder's request
+ * raised for good, since the provider aggregates it with the next load's.
+ */
+static void ave_pmp_icc_drop(struct ave_device *ave)
+{
+	if (!ave->pmp_path)
+		return;
+	icc_put(ave->pmp_path);
+	ave->pmp_path = NULL;
+	ave->pmp_voted = false;
+}
+
+/*
  * @hold: 200 ms around each access, so each marker leaves the machine
  * before the next one (f93-f99, docs/75 §10). The streaming votes skip it:
  * they run inside STREAMON and STREAMOFF.
@@ -1246,6 +1261,7 @@ static void ave_power_off(struct ave_device *ave, const char *why)
 		 * abandoned instead - see ave_power_me1_abandon() for why
 		 * that is the only thing that keeps the chain up at all.
 		 */
+		ave_pmp_icc_drop(ave);
 		ave_pmp_report_abandon(ave);
 		ave_power_me1_abandon(ave);
 		return;
@@ -1274,10 +1290,7 @@ static void ave_power_off(struct ave_device *ave, const char *why)
 	}
 	/* Vote, then report, then VENC_SYS: the reverse of power-up (docs/75 §6) */
 	ave_pmp_vote_off(ave, true);
-	if (ave->pmp_path) {
-		icc_put(ave->pmp_path);
-		ave->pmp_path = NULL;
-	}
+	ave_pmp_icc_drop(ave);
 	/* Clears PS-REQ bit 16 while VENC_SYS is still up (macOS's order) */
 	ave_pmp_report_off(ave);
 	/* Child of venc_me0, and the last thing holding a reference. */

@@ -101,7 +101,7 @@ index 1baa6de94..6d16e2975 100644
 +apple-cpu-memvote-y = cpu-memvote.o
 diff --git a/drivers/soc/apple/cpu-memvote.c b/drivers/soc/apple/cpu-memvote.c
 new file mode 100644
-index 000000000..1324fdc05
+index 000000000..24f74d6de
 --- /dev/null
 +++ b/drivers/soc/apple/cpu-memvote.c
 @@ -0,0 +1,444 @@
@@ -127,7 +127,9 @@ index 000000000..1324fdc05
 + * (always request), for A/B measurements.
 + *
 + * The interconnect provider registers this device when it has the CPU
-+ * clusters' nodes (t6000/t6001).
++ * clusters' nodes (t6000/t6001). Clusters come from the device tree's
++ * cpu-map; CPU frequencies are read from cpufreq at each sample (a CPU
++ * without a policy yet never counts as memory-bound).
 + */
 +
 +#include <linux/cpufreq.h>
@@ -139,6 +141,7 @@ index 000000000..1324fdc05
 +#include <linux/perf_event.h>
 +#include <linux/platform_device.h>
 +#include <linux/slab.h>
++#include <linux/topology.h>
 +#include <linux/soc/apple/pmp-icc.h>
 +#include <linux/soc/apple/pmp-report.h>
 +#include <linux/workqueue.h>
@@ -448,25 +451,22 @@ index 000000000..1324fdc05
 +	for_each_possible_cpu(cpu)
 +		per_cpu_ptr(mv->cpu, cpu)->cluster = -1;
 +
-+	/* clusters = cpufreq policies in order of their first CPU */
++	/*
++	 * Clusters from the device tree's cpu-map (cluster0 = E, cluster1/2 =
++	 * the P clusters on t6000/t6001, the order of their request slots), so
++	 * CPUs that are offline now still map to the right cluster and no
++	 * cpufreq policy is needed yet.
++	 */
++	for (i = 0; i < MEMVOTE_MAX_CLUSTERS; i++)
++		mv->cl[i].first_cpu = UINT_MAX;
 +	for_each_possible_cpu(cpu) {
-+		struct cpufreq_policy *pol = cpufreq_cpu_get(cpu);
-+		unsigned int first, c;
++		int c = topology_cluster_id(cpu);
 +
-+		if (!pol)
-+			return dev_err_probe(dev, -EPROBE_DEFER, "no cpufreq policy for cpu%u\n", cpu);
-+		first = cpumask_first(pol->related_cpus);
-+		cpufreq_cpu_put(pol);
-+		for (c = 0; c < mv->n_cl && mv->cl[c].first_cpu != first; c++)
-+			;
-+		if (c == mv->n_cl) {
-+			if (c >= MEMVOTE_MAX_CLUSTERS)
-+				return dev_err_probe(dev, -ENODEV, "more than %d clusters\n",
-+						     MEMVOTE_MAX_CLUSTERS);
-+			mv->cl[c].first_cpu = first;
-+			mv->n_cl++;
-+		}
++		if (c < 0 || c >= MEMVOTE_MAX_CLUSTERS)
++			return dev_err_probe(dev, -ENODEV, "cpu%u: cluster %d unknown\n", cpu, c);
 +		per_cpu_ptr(mv->cpu, cpu)->cluster = c;
++		mv->cl[c].first_cpu = min(mv->cl[c].first_cpu, cpu);
++		mv->n_cl = max_t(unsigned int, mv->n_cl, c + 1);
 +	}
 +
 +	for (i = 0; i < mv->n_cl; i++) {
