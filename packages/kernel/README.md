@@ -197,15 +197,57 @@ SMC system power):
 The encoder's output was identical with the vote through the provider and
 with its old direct write (PSNR 44.2 dB).
 
-The GPU's own shortfall (3-20% on memory-bound work) is not a CPU-request
-problem: t600x device trees have no PMP report entry for the GPU, which
-t8112's have. Setting the GPU's report bit while the GPU is running gives
-it more than PMP-off bandwidth. But making such an entry the GPU's power
-domain, as t8112 does, hung an M1 Max within seconds of the GPU firmware
-starting (three times out of three; without the entry, the same steps
-worked). Asahi's t600x GPU configuration maps no PMP doorbell for the GPU
-firmware, unlike t8103/t8112, which may be why. That change is not in this
-series.
+### The GPU's report to the PMP, patches 0035-0037
+
+Rationale, evidence, design, tests and provenance: [docs/pmp-gpu-report.md](../../docs/pmp-gpu-report.md).
+
+The GPU's own shortfall with the PMP running (3-20% on memory-bound work)
+is not a CPU-request problem: the PMP runs its own bandwidth-driven fabric
+and DRAM controller DVFS for the GPU, but only for a GPU that has been
+reported powered on. Apple's device tree marks the GPU (PMGR device `GFX`,
+report bit 9) as one that reports its power state to the PMP; Asahi's
+t600x device trees have a report entry for every other such block, but not
+for the GPU. t8112's trees make such an entry the GPU's power domain. On an
+M1 Max that reports the GPU before its firmware boots, and the machine
+hard-hangs within seconds of the firmware starting (three times out of
+three). Reported once the GPU driver has bound, it is fine.
+
+- 0035: DT binding for the PMP power state report node and its entries
+  (`Documentation/devicetree/bindings/power/apple,pmp-report.yaml`; the
+  Asahi tree has none), with the new `apple,report-while-bound`;
+- 0036: `pmp-report`: an entry with `apple,report-while-bound = <&dev>` is
+  not a power domain. It reports its block on once that device's driver
+  has bound and the PMP runs (it waits for the PMP if the driver binds
+  first), and off when the driver starts to unbind, across system sleep
+  and at shutdown;
+- 0037: t6000/t6001 device trees: `report@9` for the GPU in that mode.
+  The GPU keeps its PMGR power domain. Not on t6002: the PMP has not been
+  run on a two-die machine yet (its Apple device tree also lists one `GFX`
+  device, id 10); t602x and later are not covered either.
+
+The bit was checked against Apple's device trees for the 14" M1 Pro
+(J314s, t6000) and M1 Max (J314c, t6001). Measured on an M1 Max (14", PMP
+running, entry added before the GPU driver loads, CPU votes off), GPU
+mat-vec 4096x14336 in GB/s:
+
+| | f32 | f16 | bf16 | q4_0 |
+|---|---|---|---|---|
+| with the report (0036, 0037) | ~169 | ~221 | ~260 | ~153 |
+| without it | ~163 | ~190 | ~188 | ~136 |
+| PMP not running | 168 | 217 | 237 | 148 |
+
+Idle power is unchanged (the PMP drops the levels again when the GPU
+idles); under sustained GPU mat-vec the machine draws about 10 W more
+(53.7 -> 64.0 W) while doing 4-37% more work. Also tested: the GPU driver
+binding before the PMP starts (the report follows once it runs). Not yet
+tested: suspend/resume (it hangs this machine without these patches too)
+and a boot with these device trees in m1n1's stage 2 (the tests added the
+entry to the running device tree).
+
+As with 0030-0034, nothing changes without the PMP running: these device
+trees are only used when m1n1's stage 2 is rebuilt from them with
+`APPLE_USE_PMP`, and the report is never written while the PMP is not
+running.
 
 ## Thunderbolt in this kernel
 

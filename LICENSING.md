@@ -55,6 +55,13 @@ the request slots, and the layout of a request word. No code or data from
 Apple's files is in these patches; the slot numbers and request steps are
 facts of the hardware interface and of measurements.
 
+`0035`-`0037` (the GPU's report to the PMP) are this project's work too:
+the `pmp-report` change is `GPL-2.0-only OR MIT` like the driver, the new
+binding `GPL-2.0-only OR BSD-2-Clause` like the other device tree
+bindings. The report bit comes from Apple's device trees (the ADTs of the
+restore image, read with m1n1's ADT parser, as Asahi's device trees are
+written) and the behaviour from measurement on Linux.
+
 ## apple-avd
 
 The driver is the Asahi Linux kernel tree's `drivers/media/platform/apple/avd`, as this project's kernel ships it:
