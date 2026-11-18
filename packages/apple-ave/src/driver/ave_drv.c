@@ -19,6 +19,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/kernel.h>
 #include <linux/interrupt.h>
+#include <linux/interconnect.h>
 #include <linux/iopoll.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -30,6 +31,13 @@
 #include <linux/slab.h>
 #include <linux/suspend.h>
 #include <linux/unaligned.h>
+
+#if __has_include(<linux/soc/apple/pmp-icc.h>)
+#include <linux/soc/apple/pmp-icc.h>
+#define AVE_HAVE_PMP_ICC 1
+#else
+#define AVE_HAVE_PMP_ICC 0
+#endif
 
 #include "ave.h"
 #include "ave_dapf.h"
@@ -227,6 +235,16 @@ static bool pmp_vote_always;
 module_param(pmp_vote_always, bool, 0444);
 MODULE_PARM_DESC(pmp_vote_always,
 		 "hold pmp_vote from probe to unload instead of only while a stream is open (default 0)");
+/*
+ * Kernels with the PMP interconnect provider (apple-silicon-kernel-plus) own
+ * the dashboard: the vote then goes through it as a bandwidth request on the
+ * "apple-pmp-ave0" node, with the SOC level as the request tag, instead of
+ * this driver writing the slot itself. pmp_icc=0 keeps the direct write.
+ */
+static bool pmp_icc = true;
+module_param(pmp_icc, bool, 0444);
+MODULE_PARM_DESC(pmp_icc,
+		 "send pmp_vote through the PMP interconnect provider when the kernel has one (default 1)");
 /* The entry's addresses are per SoC: ave->soc->pmp_dvfs_wr / _rd */
 #define AVE_PTD_DVFS_VALID	BIT_ULL(61)
 #define AVE_PTD_DVFS_MASK	(AVE_PTD_DVFS_VALID | GENMASK_ULL(33, 32) | GENMASK_ULL(1, 0))
@@ -975,6 +993,32 @@ static int ave_pmp_report_on(struct ave_device *ave)
 }
 
 /*
+ * pmp_vote as an interconnect request: the SOC field becomes the tag, the
+ * FAB0 field the bandwidth (0 -> the lowest step, 1-3 -> the provider's
+ * steps). The provider's top step also raises the DRAM controller.
+ */
+static int ave_pmp_vote_icc(struct ave_device *ave, u64 val)
+{
+#if AVE_HAVE_PMP_ICC
+	static const u32 fab_kbps[4] = { 1, 64000000, 128000000, 200000000 };
+	unsigned int soc = val & 0x3, fab = (val >> 32) & 0x3;
+	int ret;
+
+	if (val == AVE_PTD_DVFS_VALID) {
+		ret = icc_set_bw(ave->pmp_path, 0, 0);
+	} else {
+		icc_set_tag(ave->pmp_path, APPLE_PMP_ICC_TAG_SOC(soc));
+		ret = icc_set_bw(ave->pmp_path, 0, fab_kbps[fab]);
+	}
+	dev_info(ave->dev, "pmp: AVE0 vote %#018llx as interconnect request (soc %u, fab %u): %d\n",
+		 val, soc, fab, ret);
+	return ret;
+#else
+	return -ENODEV;
+#endif
+}
+
+/*
  * @hold: 200 ms around each access, so each marker leaves the machine
  * before the next one (f93-f99, docs/75 §10). The streaming votes skip it:
  * they run inside STREAMON and STREAMOFF.
@@ -990,6 +1034,9 @@ static int ave_pmp_vote(struct ave_device *ave, u64 val, bool hold)
 {
 	void __iomem *wr, *rd;
 	u64 back, st;
+
+	if (ave->pmp_path)
+		return ave_pmp_vote_icc(ave, val);
 
 	/*
 	 * Non-posted, as /soc's nonposted-mmio makes every resource-based
@@ -1057,6 +1104,19 @@ static int ave_pmp_vote_setup(struct ave_device *ave)
 	if (!(v & AVE_PTD_DVFS_VALID) || (v & ~AVE_PTD_DVFS_MASK))
 		return dev_err_probe(ave->dev, -EINVAL,
 				     "pmp: pmp_vote %#llx is not 1<<61 | FAB0(0-3)<<32 | SOC(0-3)\n", v);
+#if AVE_HAVE_PMP_ICC
+	if (pmp_icc && ave->soc->inst == 0 && !ave->pmp_path) {
+		struct icc_path *p = icc_get(ave->dev, APPLE_PMP_ICC_AVE0, APPLE_PMP_ICC_DRAM);
+
+		if (IS_ERR_OR_NULL(p)) {
+			dev_info(ave->dev, "pmp: no PMP interconnect path (%d); writing the slot directly\n",
+				 PTR_ERR_OR_ZERO(p));
+		} else {
+			ave->pmp_path = p;
+			dev_info(ave->dev, "pmp: voting through the PMP interconnect provider\n");
+		}
+	}
+#endif
 	if (!pmp_vote_always && !ave_session_selftest_requested()) {
 		ave->pmp_vote_streaming = true;
 		dev_info(ave->dev, "pmp: vote %#llx will be held while a stream is open\n", v);
@@ -1094,7 +1154,7 @@ void ave_pmp_stream_off(struct ave_device *ave)
 	 * The vote's read-back, deferred to here: the PMP has long taken it
 	 * up (status +8 bit 1 clear, v3), so reading cannot cancel it.
 	 */
-	if (ave->pmp_voted) {
+	if (ave->pmp_voted && !ave->pmp_path) {
 		void __iomem *rd = ioremap_np(ave->soc->pmp_dvfs_rd, 16);
 
 		if (rd) {
@@ -1214,6 +1274,10 @@ static void ave_power_off(struct ave_device *ave, const char *why)
 	}
 	/* Vote, then report, then VENC_SYS: the reverse of power-up (docs/75 §6) */
 	ave_pmp_vote_off(ave, true);
+	if (ave->pmp_path) {
+		icc_put(ave->pmp_path);
+		ave->pmp_path = NULL;
+	}
 	/* Clears PS-REQ bit 16 while VENC_SYS is still up (macOS's order) */
 	ave_pmp_report_off(ave);
 	/* Child of venc_me0, and the last thing holding a reference. */

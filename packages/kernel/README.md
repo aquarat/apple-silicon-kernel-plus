@@ -142,6 +142,71 @@ Measured Mac Studio M1 Max to MacBook Pro M1 Max: 21 Gb/s single stream,
 `apple-silicon-thunderbolt` has the udev rule that goes with them (threaded
 NAPI and GRO off on thunderbolt-net interfaces).
 
+### Fabric and DRAM requests to the PMP, patches 0030-0034
+
+On M1 Pro/Max (t6000/t6001) with the power management coprocessor (PMP)
+running (an `APPLE_USE_PMP` device tree; off in Fedora's trees), the PMP
+sets the fabric and DRAM controller performance states. It saves about
+1.3 W at idle on an M1 Max, but nothing in Linux asks it for bandwidth, so
+a CPU that streams memory gets the lowest levels: CPU STREAM bandwidth
+halves (110/133 -> 55/67 GB/s copy/triad, 10 threads). Each agent (CPU
+cluster, GPU, encoder, ...) has a request slot in the PMP's shared
+dashboard. These patches let Linux use the CPU clusters' and the encoder's
+slots:
+
+- 0030: `pmp-report`: a 64-bit shift for the report entry bit (ids of 31
+  and above, used on t6002, were undefined behaviour);
+- 0031: `pmp-report`: `apple_pmp_dvfs_request()`, which writes an agent's
+  request (SoC, fabric and DRAM-controller levels) into its slot.
+  Write-only (reading a slot back can cancel a request the PMP has not
+  taken yet), withdrawn across suspend and at shutdown;
+- 0032: `icc_get()` exported, so consumers can find paths by node name
+  (the device tree comes from the boot loader, so consumers cannot rely on
+  new `interconnects` properties);
+- 0033: an interconnect provider (`INTERCONNECT_APPLE_PMP=y`): one node per
+  agent with a known slot (the three CPU clusters and the first encoder on
+  t6000/t6001), each linked to a DRAM node; the requested bandwidth picks a
+  fabric/DRAM step, and a request tag can add a minimum SoC level;
+- 0034: `apple-cpu-memvote` (`APPLE_CPU_MEMVOTE=m`): each CPU cluster
+  requests bandwidth while it is memory-bound: busy, at a high frequency,
+  and with at least 10 L1D load misses per 1000 cycles (CPU PMU). A
+  request held all the time would cost about 2.4 W under compute-bound
+  load. `apple_cpu_memvote.mode=off|auto|force` (also writable at
+  `/sys/module/apple_cpu_memvote/parameters/mode`) is for A/B tests; the
+  device's `stats` attribute shows each cluster's state.
+
+The `apple-ave` package sends its PMP vote through the provider on this
+kernel (`pmp_icc=1`, the default) instead of writing the slot itself.
+
+Nothing changes on machines without the PMP running (the requests are not
+written; the CPU votes are not sampled), or on t6002, t8112 and t8103 (no
+provider).
+
+Measured on an M1 Max (14", 7.3.1 with these patches, PMP running,
+SMC system power):
+
+| | `mode=auto` | `mode=off` | PMP not running |
+|---|---|---|---|
+| CPU STREAM 10 threads, copy/triad GB/s | 163/165 | 55/67 | 110/134 |
+| CPU STREAM 1 thread, E / P0 / P1 cluster | 35 / 77 / 76 | - / 25 / - | 52 (P) |
+| idle W (3 pairs, 60 s each) | 4.84, 4.68, 4.50 | 4.88, 4.63, 4.54 | |
+| sha256 on 10 threads, W (5 pairs, 25 s) | 25.6 | 25.9 | |
+| GPU mat-vec f16/bf16 GB/s | 197/195 | 188/192 | 217/237 |
+| video encoder, 120 frames 1080p H.264 | 2.51 s (2.50 s with the driver's own slot write; 3.92 s without a vote) | | |
+
+The encoder's output was identical with the vote through the provider and
+with its old direct write (PSNR 44.2 dB).
+
+The GPU's own shortfall (3-20% on memory-bound work) is not a CPU-request
+problem: t600x device trees have no PMP report entry for the GPU, which
+t8112's have. Setting the GPU's report bit while the GPU is running gives
+it more than PMP-off bandwidth. But making such an entry the GPU's power
+domain, as t8112 does, hung an M1 Max within seconds of the GPU firmware
+starting (three times out of three; without the entry, the same steps
+worked). Asahi's t600x GPU configuration maps no PMP doorbell for the GPU
+firmware, unlike t8103/t8112, which may be why. That change is not in this
+series.
+
 ## Thunderbolt in this kernel
 
 - `thunderbolt_apple` (the Apple host router driver, `USB4_APPLE_SOC=m`)

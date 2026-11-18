@@ -9,7 +9,7 @@
 
 Name:           apple-ave
 Version:        0.99.6
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        EXPERIMENTAL Apple AVE H.264/HEVC video encoder driver
 License:        GPL-2.0-only
 URL:            https://github.com/aquarat/apple-silicon-kernel-plus
@@ -138,6 +138,12 @@ dkms remove -m apple-ave -v %{version} --all --rpm_safe_upgrade >/dev/null 2>&1 
 %{_libexecdir}/apple-ave/ave-load
 
 %changelog
+* Wed Nov 18 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 0.99.6-3
+- On kernels with the PMP interconnect provider (this project's kernel
+  patches 0030-0034), the PMP vote goes through it as a bandwidth request
+  (pmp_icc=1, the default) instead of the driver writing the PMP's request
+  slot itself; other kernels are unchanged. Same encode speed and output.
+
 * Tue Nov 17 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 0.99.6-2
 - apple-ave-fetch-firmware reads only local files by default (the EFI
   partition's kernelcache, --from-dir, --ipsw); downloading from Apple's
