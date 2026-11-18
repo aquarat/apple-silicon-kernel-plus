@@ -38,8 +38,8 @@ Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
  drivers/interconnect/apple/pmp-icc.c |  10 +
  drivers/soc/apple/Kconfig            |  14 +
  drivers/soc/apple/Makefile           |   3 +
- drivers/soc/apple/cpu-memvote.c      | 444 +++++++++++++++++++++++++++
- 4 files changed, 471 insertions(+)
+ drivers/soc/apple/cpu-memvote.c      | 490 +++++++++++++++++++++++++++
+ 4 files changed, 517 insertions(+)
  create mode 100644 drivers/soc/apple/cpu-memvote.c
 
 diff --git a/drivers/interconnect/apple/pmp-icc.c b/drivers/interconnect/apple/pmp-icc.c
@@ -101,10 +101,10 @@ index 1baa6de94..6d16e2975 100644
 +apple-cpu-memvote-y = cpu-memvote.o
 diff --git a/drivers/soc/apple/cpu-memvote.c b/drivers/soc/apple/cpu-memvote.c
 new file mode 100644
-index 000000000..24f74d6de
+index 000000000..b4177d53b
 --- /dev/null
 +++ b/drivers/soc/apple/cpu-memvote.c
-@@ -0,0 +1,444 @@
+@@ -0,0 +1,490 @@
 +// SPDX-License-Identifier: GPL-2.0-only OR MIT
 +/*
 + * Apple SoC CPU cluster memory-bandwidth votes
@@ -133,6 +133,7 @@ index 000000000..24f74d6de
 + */
 +
 +#include <linux/cpufreq.h>
++#include <linux/cpuhotplug.h>
 +#include <linux/cpumask.h>
 +#include <linux/interconnect.h>
 +#include <linux/ktime.h>
@@ -210,6 +211,7 @@ index 000000000..24f74d6de
 +	struct icc_path *path;
 +	unsigned int first_cpu;
 +	bool high;
++	u32 bw;			/* bandwidth of the request in place */
 +	ktime_t last_busy;
 +	u64 ups;
 +	u64 ms_high;
@@ -220,6 +222,7 @@ index 000000000..24f74d6de
 +	struct perf_event *cyc, *miss;
 +	u64 prev_cyc, prev_miss, prev_idle, prev_wall;
 +	bool stale;			/* prev_cyc/prev_miss are not from the last period */
++	bool recreate;			/* CPU went offline: perf dropped its events */
 +	unsigned long next_try;		/* jiffies: when to retry creating the counters */
 +	int cluster;
 +};
@@ -241,9 +244,15 @@ index 000000000..24f74d6de
 +
 +static void memvote_set(struct memvote *mv, struct memvote_cluster *c, bool high)
 +{
-+	if (c->high == high)
++	u32 bw = high ? READ_ONCE(bw_kbps) : 0;
++
++	/* also re-sends a held request when bw_kbps was changed meanwhile */
++	if (c->high == high && c->bw == bw)
 +		return;
-+	if (icc_set_bw(c->path, 0, high ? bw_kbps : 0))
++	if (icc_set_bw(c->path, 0, bw))
++		return;
++	c->bw = bw;
++	if (c->high == high)
 +		return;
 +	c->high = high;
 +	if (high) {
@@ -256,20 +265,36 @@ index 000000000..24f74d6de
 +
 +static struct perf_event *memvote_counter(unsigned int cpu, u64 config);
 +
-+/* Counters for a CPU that came online after probe, or whose creation failed; retried every 10 s. */
-+static bool memvote_cpu_counters(struct memvote_cpu *mc, unsigned int cpu)
++/*
++ * Counters for CPUs that came online after probe, whose creation failed
++ * (retried every 10 s), or that went offline since (perf removes a CPU's
++ * events then and does not reinstall them). Runs outside cpus_read_lock().
++ */
++static void memvote_fix_counters(struct memvote *mv)
 +{
-+	if (mc->cyc && mc->miss)
-+		return true;
-+	if (time_before(jiffies, mc->next_try))
-+		return false;
-+	mc->next_try = jiffies + 10 * HZ;
-+	if (!mc->cyc)
-+		mc->cyc = memvote_counter(cpu, M1_PMU_CORE_ACTIVE_CYCLE);
-+	if (!mc->miss)
-+		mc->miss = memvote_counter(cpu, M1_PMU_L1D_CACHE_MISS_LD);
-+	mc->stale = true;
-+	return mc->cyc && mc->miss;
++	unsigned int cpu;
++
++	for_each_possible_cpu(cpu) {
++		struct memvote_cpu *mc = per_cpu_ptr(mv->cpu, cpu);
++
++		if (READ_ONCE(mc->recreate)) {
++			WRITE_ONCE(mc->recreate, false);
++			if (mc->cyc)
++				perf_event_release_kernel(mc->cyc);
++			if (mc->miss)
++				perf_event_release_kernel(mc->miss);
++			mc->cyc = mc->miss = NULL;
++			mc->next_try = jiffies;
++		}
++		if ((mc->cyc && mc->miss) || !cpu_online(cpu) || time_before(jiffies, mc->next_try))
++			continue;
++		mc->next_try = jiffies + 10 * HZ;
++		if (!mc->cyc)
++			mc->cyc = memvote_counter(cpu, M1_PMU_CORE_ACTIVE_CYCLE);
++		if (!mc->miss)
++			mc->miss = memvote_counter(cpu, M1_PMU_L1D_CACHE_MISS_LD);
++		mc->stale = true;
++	}
 +}
 +
 +static bool memvote_cpu_bound(struct memvote *mv, unsigned int cpu)
@@ -302,7 +327,7 @@ index 000000000..24f74d6de
 +		goto skip;
 +
 +	/* without counters, never guess: a wrong "yes" costs watts */
-+	if (!memvote_cpu_counters(mc, cpu))
++	if (!mc->cyc || !mc->miss)
 +		return false;
 +	cyc = perf_event_read_value(mc->cyc, &en, &run);
 +	miss = perf_event_read_value(mc->miss, &en, &run);
@@ -343,6 +368,7 @@ index 000000000..24f74d6de
 +		goto out;
 +	}
 +
++	memvote_fix_counters(mv);
 +	cpus_read_lock();
 +	for_each_online_cpu(cpu) {
 +		int c = per_cpu_ptr(mv->cpu, cpu)->cluster;
@@ -365,6 +391,17 @@ index 000000000..24f74d6de
 +out:
 +	mutex_unlock(&mv->lock);
 +	queue_delayed_work(system_freezable_wq, &mv->work, delay);
++}
++
++static enum cpuhp_state memvote_hp_state;
++
++static int memvote_cpu_offline(unsigned int cpu)
++{
++	mutex_lock(&memvote_active_lock);
++	if (memvote_active)
++		WRITE_ONCE(per_cpu_ptr(memvote_active->cpu, cpu)->recreate, true);
++	mutex_unlock(&memvote_active_lock);
++	return 0;
 +}
 +
 +static void memvote_kick(struct memvote *mv)
@@ -499,6 +536,12 @@ index 000000000..24f74d6de
 +	mutex_lock(&memvote_active_lock);
 +	memvote_active = mv;
 +	mutex_unlock(&memvote_active_lock);
++	ret = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN, "soc/apple-cpu-memvote:online",
++					NULL, memvote_cpu_offline);
++	if (ret < 0)
++		dev_warn(dev, "no CPU hotplug callback (%d): counters of CPUs taken offline stop\n", ret);
++	else
++		memvote_hp_state = ret;
 +	dev_info(dev, "%u clusters, mode %s\n", mv->n_cl, memvote_modes[READ_ONCE(mode)]);
 +	return 0;
 +}
@@ -518,6 +561,9 @@ index 000000000..24f74d6de
 +{
 +	struct memvote *mv = platform_get_drvdata(pdev);
 +
++	if (memvote_hp_state > 0)
++		cpuhp_remove_state_nocalls(memvote_hp_state);
++	memvote_hp_state = 0;
 +	mutex_lock(&memvote_active_lock);
 +	memvote_active = NULL;
 +	mutex_unlock(&memvote_active_lock);
