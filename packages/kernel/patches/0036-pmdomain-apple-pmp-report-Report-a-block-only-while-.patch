@@ -1,0 +1,259 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: aquarat <3090997+aquarat@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 14:33:28 +0000
+Subject: [PATCH 36/37] pmdomain: apple: pmp-report: Report a block only while
+ its driver is bound
+
+On t6000/t6001 the PMP runs its own bandwidth-driven fabric and DRAM
+controller DVFS for the GPU, but only for a GPU that has been reported
+powered on, and Linux never reports it: the ADT marks the PMGR device GFX
+(id 10, report bit 9) as reporting to the PMP, and every other such block
+has a report entry in Asahi's t600x device trees. Without the report the
+fabric and DRAM controller stay at their idle levels under GPU load; GPU
+memory-bound work on an M1 Max runs 4-37% slower than with the report
+(f32/f16/bf16/q4_0 mat-vec, 4096x14336) and below the PMP-not-running
+speed.
+
+Making the entry the GPU's power domain, as t8112's device tree does,
+reports GFX before the GPU firmware boots, and that hard-hangs an M1 Max
+within seconds of the firmware starting. Reported after the GPU driver
+has bound (its firmware is booted by then), the same bit is fine.
+
+Add a mode for such entries: an entry with "apple,report-while-bound"
+names a device and is not a power domain. It is reported on once that
+device's driver has bound (after "apple,report-settle-ms", default 0) and
+the PMP runs, off when the driver starts to unbind, off across system
+sleep (back on after resume) and off at shutdown. A platform bus notifier
+follows the driver; a consumer already bound at probe is handled. If the
+PMP is not running when the driver binds, the report waits for it
+(backing off to 30 s between checks) and is never written while it does
+not run.
+
+Assisted-by: Claude:claude-opus-5-5
+Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
+---
+ drivers/pmdomain/apple/pmp-report.c | 172 +++++++++++++++++++++++++++-
+ 1 file changed, 170 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/pmdomain/apple/pmp-report.c b/drivers/pmdomain/apple/pmp-report.c
+index b1194f0eb..379a85a19 100644
+--- a/drivers/pmdomain/apple/pmp-report.c
++++ b/drivers/pmdomain/apple/pmp-report.c
+@@ -7,11 +7,16 @@
+ 
+ #include <linux/iopoll.h>
+ #include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/notifier.h>
+ #include <linux/of.h>
+ #include <linux/of_address.h>
+ #include <linux/of_platform.h>
+ #include <linux/platform_device.h>
+ #include <linux/pm_domain.h>
++#include <linux/reboot.h>
++#include <linux/suspend.h>
++#include <linux/workqueue.h>
+ #include <linux/soc/apple/pmp-report.h>
+ 
+ #define PMP_REPORT_READY 0x1
+@@ -266,18 +271,37 @@ static struct platform_driver apple_pmp_report_driver = {
+ 	},
+ };
+ 
++/*
++ * Most entries are power domains: the block is reported on while its power
++ * domain is on. Some blocks must only be reported once their own firmware
++ * runs: on t600x, reporting GFX before the GPU firmware has booted hangs the
++ * SoC, while reporting it once the firmware is up is what makes the PMP run
++ * its GPU bandwidth DVFS. Such entries name their consumer in
++ * "apple,report-while-bound" and are not power domains. They report on from
++ * "apple,report-settle-ms" after the consumer's driver has bound until it
++ * starts to unbind, and off across system sleep and at shutdown. They are
++ * only reported while the PMP runs: if it is not running yet when the
++ * consumer binds, the report waits for it.
++ */
+ struct apple_pmp_report_entry {
+ 	struct device *dev;
+ 	struct generic_pm_domain genpd;
+ 	u32 id;
++	/* report-while-bound mode */
++	struct device_node *consumer;
++	struct notifier_block bus_nb, pm_nb, reboot_nb;
++	struct delayed_work on_work;
++	struct mutex lock;		/* bound, sleeping, reported */
++	bool bound, sleeping, reported;
++	u32 settle_ms;
++	unsigned int retry_ms;		/* waiting for the PMP to start */
+ };
+ 
+ #define genpd_to_apple_pmp_report_entry(_genpd) \
+ 	container_of(_genpd, struct apple_pmp_report_entry, genpd)
+ 
+-static int apple_pmp_report_set_state(struct generic_pm_domain *genpd, bool enable)
++static int apple_pmp_report_entry_set(struct apple_pmp_report_entry *ent, bool enable)
+ {
+-	struct apple_pmp_report_entry *ent = genpd_to_apple_pmp_report_entry(genpd);
+ 	struct apple_pmp_report *rep = dev_get_drvdata(ent->dev->parent);
+ 	u64 bit_val = BIT_ULL(ent->id);
+ 	u64 val;
+@@ -301,6 +325,142 @@ static int apple_pmp_report_set_state(struct generic_pm_domain *genpd, bool enab
+ 		50000);
+ }
+ 
++static int apple_pmp_report_set_state(struct generic_pm_domain *genpd, bool enable)
++{
++	return apple_pmp_report_entry_set(genpd_to_apple_pmp_report_entry(genpd), enable);
++}
++
++/* report-while-bound mode; ent->lock held */
++static void apple_pmp_report_bound_set(struct apple_pmp_report_entry *ent, bool on)
++{
++	int ret;
++
++	if (ent->reported == on)
++		return;
++	ret = apple_pmp_report_entry_set(ent, on);
++	if (ret)
++		dev_warn(ent->dev, "PMP did not acknowledge %s: %d\n", on ? "on" : "off", ret);
++	ent->reported = on;
++}
++
++static void apple_pmp_report_on_work(struct work_struct *work)
++{
++	struct apple_pmp_report_entry *ent =
++		container_of(to_delayed_work(work), struct apple_pmp_report_entry, on_work);
++
++	struct apple_pmp_report *rep = dev_get_drvdata(ent->dev->parent);
++
++	mutex_lock(&ent->lock);
++	if (!ent->bound || ent->sleeping)
++		goto out;
++	if (!apple_pmp_report_ready(rep)) {
++		ent->retry_ms = clamp(ent->retry_ms * 2, 500U, 30000U);
++		schedule_delayed_work(&ent->on_work, msecs_to_jiffies(ent->retry_ms));
++		goto out;
++	}
++	ent->retry_ms = 0;
++	apple_pmp_report_bound_set(ent, true);
++out:
++	mutex_unlock(&ent->lock);
++}
++
++static void apple_pmp_report_bound_off(struct apple_pmp_report_entry *ent, bool *flag, bool val)
++{
++	cancel_delayed_work_sync(&ent->on_work);
++	mutex_lock(&ent->lock);
++	*flag = val;
++	apple_pmp_report_bound_set(ent, false);
++	mutex_unlock(&ent->lock);
++}
++
++static int apple_pmp_report_bus_notify(struct notifier_block *nb, unsigned long action, void *data)
++{
++	struct apple_pmp_report_entry *ent =
++		container_of(nb, struct apple_pmp_report_entry, bus_nb);
++	struct device *dev = data;
++
++	if (dev->of_node != ent->consumer)
++		return NOTIFY_DONE;
++
++	switch (action) {
++	case BUS_NOTIFY_BOUND_DRIVER:
++		mutex_lock(&ent->lock);
++		ent->bound = true;
++		mutex_unlock(&ent->lock);
++		schedule_delayed_work(&ent->on_work, msecs_to_jiffies(ent->settle_ms));
++		break;
++	case BUS_NOTIFY_UNBIND_DRIVER:
++		apple_pmp_report_bound_off(ent, &ent->bound, false);
++		break;
++	}
++	return NOTIFY_DONE;
++}
++
++static int apple_pmp_report_pm_notify(struct notifier_block *nb, unsigned long action, void *data)
++{
++	struct apple_pmp_report_entry *ent = container_of(nb, struct apple_pmp_report_entry, pm_nb);
++
++	switch (action) {
++	case PM_SUSPEND_PREPARE:
++	case PM_HIBERNATION_PREPARE:
++		apple_pmp_report_bound_off(ent, &ent->sleeping, true);
++		break;
++	case PM_POST_SUSPEND:
++	case PM_POST_HIBERNATION:
++		mutex_lock(&ent->lock);
++		ent->sleeping = false;
++		mutex_unlock(&ent->lock);
++		schedule_delayed_work(&ent->on_work, msecs_to_jiffies(ent->settle_ms));
++		break;
++	}
++	return NOTIFY_DONE;
++}
++
++static int apple_pmp_report_reboot_notify(struct notifier_block *nb, unsigned long action,
++					  void *data)
++{
++	struct apple_pmp_report_entry *ent =
++		container_of(nb, struct apple_pmp_report_entry, reboot_nb);
++
++	apple_pmp_report_bound_off(ent, &ent->sleeping, true);
++	return NOTIFY_DONE;
++}
++
++static int apple_pmp_report_bound_probe(struct apple_pmp_report_entry *ent)
++{
++	struct platform_device *cdev;
++	int ret;
++
++	ent->settle_ms = 0;
++	of_property_read_u32(ent->dev->of_node, "apple,report-settle-ms", &ent->settle_ms);
++	mutex_init(&ent->lock);
++	INIT_DELAYED_WORK(&ent->on_work, apple_pmp_report_on_work);
++	ent->bus_nb.notifier_call = apple_pmp_report_bus_notify;
++	ent->pm_nb.notifier_call = apple_pmp_report_pm_notify;
++	ent->reboot_nb.notifier_call = apple_pmp_report_reboot_notify;
++
++	ret = bus_register_notifier(&platform_bus_type, &ent->bus_nb);
++	if (ret)
++		return ret;
++	register_pm_notifier(&ent->pm_nb);
++	register_reboot_notifier(&ent->reboot_nb);
++
++	/* the consumer may have bound already */
++	cdev = of_find_device_by_node(ent->consumer);
++	if (cdev) {
++		device_lock(&cdev->dev);
++		if (device_is_bound(&cdev->dev)) {
++			mutex_lock(&ent->lock);
++			ent->bound = true;
++			mutex_unlock(&ent->lock);
++			schedule_delayed_work(&ent->on_work, msecs_to_jiffies(ent->settle_ms));
++		}
++		device_unlock(&cdev->dev);
++		put_device(&cdev->dev);
++	}
++	return 0;
++}
++
+ static int apple_pmp_report_entry_power_on(struct generic_pm_domain *genpd)
+ {
+ 	return apple_pmp_report_set_state(genpd, true);
+@@ -334,6 +494,14 @@ static int apple_pmp_report_entry_probe(struct platform_device *pdev)
+ 	if (ret < 0)
+ 		return dev_err_probe(dev, ret, "missing label property\n");
+ 
++	ent->consumer = of_parse_phandle(node, "apple,report-while-bound", 0);
++	if (ent->consumer) {
++		ret = apple_pmp_report_bound_probe(ent);
++		if (ret)
++			of_node_put(ent->consumer);
++		return ret;
++	}
++
+ 	if (of_property_read_bool(node, "apple,always-on")) {
+ 		ent->genpd.flags |= GENPD_FLAG_ACTIVE_WAKEUP;
+ 		apple_pmp_report_set_state(&ent->genpd, true);
+-- 
+2.56.0
+

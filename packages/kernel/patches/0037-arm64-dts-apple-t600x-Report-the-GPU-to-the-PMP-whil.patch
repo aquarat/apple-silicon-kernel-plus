@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: aquarat <3090997+aquarat@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 14:33:28 +0000
+Subject: [PATCH 37/37] arm64: dts: apple: t600x: Report the GPU to the PMP
+ while its driver is bound
+
+Add the GPU's PMP report entry (report bit 9, PMGR device GFX) on t6000
+and t6001, following the GPU driver rather than as its power domain:
+reported before the GPU firmware has booted, it hangs t6001. With it, the
+PMP raises the fabric and DRAM controller levels under GPU load and
+lowers them again when the GPU idles.
+
+Measured on an M1 Max (14") with the PMP running, GPU mat-vec
+(4096x14336, f32/f16/bf16/q4_0) in GB/s: ~169/220/259/153 with the entry,
+~163/190/188/136 without it, 168/217/237/148 with the PMP not running.
+Idle power unchanged; about 10 W more under sustained GPU mat-vec, which
+also runs 4-37% faster.
+
+The id was checked against the t6000 (J314s) and t6001 (J314c) Apple
+device trees. Not on t6002: the PMP has not been run on a two-die
+machine yet.
+
+Assisted-by: Claude:claude-opus-5-5
+Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
+---
+ arch/arm64/boot/dts/apple/t6002.dtsi      |  3 +++
+ arch/arm64/boot/dts/apple/t600x-die0.dtsi | 13 +++++++++++++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/apple/t6002.dtsi b/arch/arm64/boot/dts/apple/t6002.dtsi
+index 778d180a9..c60c62ab8 100644
+--- a/arch/arm64/boot/dts/apple/t6002.dtsi
++++ b/arch/arm64/boot/dts/apple/t6002.dtsi
+@@ -376,6 +376,9 @@ pmp_report_dispext3_die1: report@36 {
+ 	};
+ };
+ 
++/* Not tested on t6002 (the PMP has not been run on a two-die machine). */
++/delete-node/ &pmp_report_gfx;
++
+ &gpu {
+ 	compatible = "apple,agx-t6002", "apple,agx-g13d", "apple,agx-g13s";
+ };
+diff --git a/arch/arm64/boot/dts/apple/t600x-die0.dtsi b/arch/arm64/boot/dts/apple/t600x-die0.dtsi
+index 6aea1407f..a2effb385 100644
+--- a/arch/arm64/boot/dts/apple/t600x-die0.dtsi
++++ b/arch/arm64/boot/dts/apple/t600x-die0.dtsi
+@@ -48,6 +48,19 @@ pmp_report: pmp_report@28e3c0000 {
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+ 
++		/*
++		 * The GPU (PMGR "GFX", id 10) is reported to the PMP only while
++		 * its driver is bound. As the GPU's power domain (t8112's way),
++		 * GFX would be reported before the GPU firmware boots, which
++		 * hangs t6001.
++		 */
++		pmp_report_gfx: report@9 {
++			compatible = "apple,t6000-pmp-v2-report-entry";
++			reg = <0x9>;
++			label = "pmp-gfx";
++			apple,report-while-bound = <&gpu>;
++		};
++
+ 		pmp_report_ane_sys: report@a {
+ 			compatible = "apple,t6000-pmp-v2-report-entry";
+ 			reg = <0xa>;
+-- 
+2.56.0
+
