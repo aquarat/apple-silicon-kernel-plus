@@ -133,7 +133,7 @@ Done, on `main` unless stated:
 
 | branch | release |
 |---|---|
-| `main` | `7.3.1-900.asahiwip.plus3` |
+| `main` | `7.3.1-900.asahiwip.plus4` (plus3 + PMP requests, #18) |
 | `kernel-7.2` | `7.2.11-900.asahiwip.plus5` |
 
 - 7.3.1 `plus1` and `plus2` were earlier states of the 7.3 line; their
