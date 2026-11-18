@@ -41,6 +41,20 @@ without access to that patch. How it was written, the sources it used and
 the two incidents in that process are in
 [docs/kvm-pauth-provenance.md](docs/kvm-pauth-provenance.md).
 
+`0030`-`0034` (the PMP fabric/DRAM requests: `pmp-report` changes, the
+`apple-pmp` interconnect provider and `apple-cpu-memvote`) are this
+project's work; their new files carry `GPL-2.0-only OR MIT`, as the
+`pmp-report` driver they extend. What they rely on was found from Apple's
+device tree (the ADT of the restore image, as Asahi's own device trees
+are written), Asahi's `pmp-report` driver and black-box measurement on
+Linux. Three interface facts were first learned by
+[aquarat/apple-m-series-ave-driver](https://github.com/aquarat/apple-m-series-ave-driver)
+from macOS 13.5's kernelcache, for interoperability, and are documented
+there (docs/75): the dashboard's read/write addressing, the numbering of
+the request slots, and the layout of a request word. No code or data from
+Apple's files is in these patches; the slot numbers and request steps are
+facts of the hardware interface and of measurements.
+
 ## apple-avd
 
 The driver is the Asahi Linux kernel tree's `drivers/media/platform/apple/avd`, as this project's kernel ships it:

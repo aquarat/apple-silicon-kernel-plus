@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: aquarat <3090997+aquarat@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 10:32:15 +0000
+Subject: [PATCH 32/34] interconnect: Export icc_get()
+
+icc_get() finds a path by node names. It is used only by the debugfs
+client today, but consumers whose device tree has no "interconnects"
+property need it too: on Apple silicon the device tree comes from the
+boot loader's copy, so a new provider's consumers (the CPU clusters)
+cannot rely on a DT update reaching every machine. Export it and
+declare it in <linux/interconnect.h>.
+
+Assisted-by: Claude:claude-opus-5-5
+Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
+---
+ drivers/interconnect/core.c  | 4 ++++
+ include/linux/interconnect.h | 7 +++++++
+ 2 files changed, 11 insertions(+)
+
+diff --git a/drivers/interconnect/core.c b/drivers/interconnect/core.c
+index 4aa991a54..211afbb49 100644
+--- a/drivers/interconnect/core.c
++++ b/drivers/interconnect/core.c
+@@ -616,6 +616,9 @@ EXPORT_SYMBOL_GPL(of_icc_get);
+  * icc_path handle on success. Use icc_put() to release constraints when they
+  * are not needed anymore.
+  *
++ * For consumers whose device tree has no "interconnects" property, e.g.
++ * CPU clusters on platforms whose device tree comes from the boot loader.
++ *
+  * Return: icc_path pointer on success or ERR_PTR() on error. NULL is returned
+  * when the API is disabled.
+  */
+@@ -654,6 +657,7 @@ struct icc_path *icc_get(struct device *dev, const char *src, const char *dst)
+ 	mutex_unlock(&icc_lock);
+ 	return path;
+ }
++EXPORT_SYMBOL_GPL(icc_get);
+ 
+ /**
+  * icc_set_tag() - set an optional tag on a path
+diff --git a/include/linux/interconnect.h b/include/linux/interconnect.h
+index 75a32ad04..8d2526967 100644
+--- a/include/linux/interconnect.h
++++ b/include/linux/interconnect.h
+@@ -43,6 +43,7 @@ struct icc_bulk_data {
+ 
+ #if IS_ENABLED(CONFIG_INTERCONNECT)
+ 
++struct icc_path *icc_get(struct device *dev, const char *src, const char *dst);
+ struct icc_path *of_icc_get(struct device *dev, const char *name);
+ struct icc_path *devm_of_icc_get(struct device *dev, const char *name);
+ int devm_of_icc_bulk_get(struct device *dev, int num_paths, struct icc_bulk_data *paths);
+@@ -63,6 +64,12 @@ void icc_bulk_disable(int num_paths, const struct icc_bulk_data *paths);
+ 
+ #else
+ 
++static inline struct icc_path *icc_get(struct device *dev, const char *src,
++				       const char *dst)
++{
++	return NULL;
++}
++
+ static inline struct icc_path *of_icc_get(struct device *dev,
+ 					  const char *name)
+ {
+-- 
+2.56.0
+

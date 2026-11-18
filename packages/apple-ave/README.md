@@ -97,6 +97,10 @@ coprocessor (PMP), which runs only when the device tree was built with its
 `pmp` alias; Fedora's is not, and this project does not change device
 trees. `ave-load` sends the vote where the PMP is running and the vote
 helps (t6000, t6001); otherwise the encoder runs at its boot clock.
+On this project's kernel (patches 0030-0034, the PMP interconnect
+provider), the driver sends the vote through the provider instead of
+writing the PMP's request slot itself (`pmp_icc=1`, the default;
+`pmp_icc=0` keeps the direct write); speed and output are the same.
 H.264, one stream, upstream docs/87, 89, 90, 98 and the upstream README:
 
 | SoC | without the vote (stock DT) | with the vote |

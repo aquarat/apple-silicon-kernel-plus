@@ -1,0 +1,411 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: aquarat <3090997+aquarat@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 10:32:15 +0000
+Subject: [PATCH 33/34] interconnect: apple: Add a PMP provider for fabric and
+ DRAM requests
+
+On t600x the PMP sets the fabric and DRAM controller (DCS) performance
+states, from its own monitors and from the agents' DVFS requests in its
+dashboard. Add an interconnect provider on top of the report driver's
+DVFS request interface, so that drivers ask for memory bandwidth in the
+usual way and the provider turns that into requests:
+
+- one node per agent with a known slot (the three CPU clusters and the
+  first video encoder on t6000/t6001), each linked to a DRAM node;
+- an agent's aggregated bandwidth, the larger of average and peak,
+  picks a step from a per-SoC table: up to 64 GB/s asks for fabric
+  level 1, up to 128 GB/s for level 2, more for fabric level 3 and DCS
+  level 3; no bandwidth withdraws the request;
+- a request tag can add a minimum SoC level (the encoder's clock
+  follows it).
+
+The steps were measured on an M1 Max with CPU STREAM from one cluster's
+slot: fabric level 1, 2 and 3+DCS 3 give about 128, 146 and 160 GB/s
+(10 threads), against 55 GB/s with no request and 110 GB/s with the PMP
+not running.
+
+The report driver registers the provider as its child when the SoC's
+slots are known. The provider is built in and cannot be unbound, since
+consumers hold paths into it. t6002 is not described yet (two dies'
+worth of clusters and agents) and gets no provider.
+
+Assisted-by: Claude:claude-opus-5-5
+Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
+---
+ drivers/interconnect/Kconfig         |   1 +
+ drivers/interconnect/Makefile        |   1 +
+ drivers/interconnect/apple/Kconfig   |  12 ++
+ drivers/interconnect/apple/Makefile  |   2 +
+ drivers/interconnect/apple/pmp-icc.c | 244 +++++++++++++++++++++++++++
+ drivers/pmdomain/apple/pmp-report.c  |  17 ++
+ include/linux/soc/apple/pmp-icc.h    |  20 +++
+ 7 files changed, 297 insertions(+)
+ create mode 100644 drivers/interconnect/apple/Kconfig
+ create mode 100644 drivers/interconnect/apple/Makefile
+ create mode 100644 drivers/interconnect/apple/pmp-icc.c
+ create mode 100644 include/linux/soc/apple/pmp-icc.h
+
+diff --git a/drivers/interconnect/Kconfig b/drivers/interconnect/Kconfig
+index 882dcb0b4..a66360bea 100644
+--- a/drivers/interconnect/Kconfig
++++ b/drivers/interconnect/Kconfig
+@@ -11,6 +11,7 @@ menuconfig INTERCONNECT
+ 
+ if INTERCONNECT
+ 
++source "drivers/interconnect/apple/Kconfig"
+ source "drivers/interconnect/imx/Kconfig"
+ source "drivers/interconnect/mediatek/Kconfig"
+ source "drivers/interconnect/qcom/Kconfig"
+diff --git a/drivers/interconnect/Makefile b/drivers/interconnect/Makefile
+index dc4c7b657..6ebe0622c 100644
+--- a/drivers/interconnect/Makefile
++++ b/drivers/interconnect/Makefile
+@@ -4,6 +4,7 @@ CFLAGS_core.o				:= -I$(src)
+ icc-core-objs				:= core.o bulk.o debugfs-client.o
+ 
+ obj-$(CONFIG_INTERCONNECT)		+= icc-core.o
++obj-$(CONFIG_INTERCONNECT)		+= apple/
+ obj-$(CONFIG_INTERCONNECT_IMX)		+= imx/
+ obj-$(CONFIG_INTERCONNECT_MTK)		+= mediatek/
+ obj-$(CONFIG_INTERCONNECT_QCOM)		+= qcom/
+diff --git a/drivers/interconnect/apple/Kconfig b/drivers/interconnect/apple/Kconfig
+new file mode 100644
+index 000000000..1110bfa19
+--- /dev/null
++++ b/drivers/interconnect/apple/Kconfig
+@@ -0,0 +1,12 @@
++# SPDX-License-Identifier: GPL-2.0-only
++config INTERCONNECT_APPLE_PMP
++	bool "Apple SoC PMP interconnect provider"
++	depends on ARCH_APPLE || COMPILE_TEST
++	depends on APPLE_PMP_REPORT
++	default ARCH_APPLE
++	help
++	  Interconnect provider that turns bandwidth requests of CPU clusters
++	  and other SoC agents into fabric and DRAM controller performance
++	  requests to the power management coprocessor (PMP) on Apple t600x
++	  SoCs. Without requests, the PMP keeps the fabric and memory
++	  controller at low performance levels while the CPUs stream memory.
+diff --git a/drivers/interconnect/apple/Makefile b/drivers/interconnect/apple/Makefile
+new file mode 100644
+index 000000000..6a038364a
+--- /dev/null
++++ b/drivers/interconnect/apple/Makefile
+@@ -0,0 +1,2 @@
++# SPDX-License-Identifier: GPL-2.0-only
++obj-$(CONFIG_INTERCONNECT_APPLE_PMP) += pmp-icc.o
+diff --git a/drivers/interconnect/apple/pmp-icc.c b/drivers/interconnect/apple/pmp-icc.c
+new file mode 100644
+index 000000000..face9ca93
+--- /dev/null
++++ b/drivers/interconnect/apple/pmp-icc.c
+@@ -0,0 +1,244 @@
++// SPDX-License-Identifier: GPL-2.0-only OR MIT
++/*
++ * Apple SoC interconnect provider: bandwidth requests to the PMP
++ *
++ * On t600x the power management coprocessor (PMP) sets the fabric and DRAM
++ * controller (DCS) performance states. Agents ask for more through their
++ * DVFS slot in the PMP dashboard (see apple_pmp_dvfs_request()). This
++ * provider turns interconnect bandwidth requests into those slot values:
++ * one node per agent, each linked to a DRAM node. A request's peak (or
++ * average, whichever is larger) bandwidth picks a fabric/DCS step from a
++ * per-SoC table; the request tag can add a minimum SoC level.
++ */
++
++#include <linux/interconnect-provider.h>
++#include <linux/init.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/soc/apple/pmp-icc.h>
++#include <linux/soc/apple/pmp-report.h>
++
++#define APPLE_PMP_ICC_ID_BASE	0x30
++#define APPLE_PMP_ICC_DRAM_ID	0x40
++
++struct apple_pmp_icc_agent {
++	const char *name;
++	unsigned int slot;
++};
++
++struct apple_pmp_icc_step {
++	u32 max_kbps;		/* this step covers requests up to this bandwidth */
++	u64 levels;		/* fabric/DCS fields of the request */
++};
++
++struct apple_pmp_icc_soc {
++	const struct apple_pmp_icc_agent *agents;
++	unsigned int n_agents;
++	const struct apple_pmp_icc_step *steps;
++	unsigned int n_steps;
++};
++
++struct apple_pmp_icc_node {
++	struct apple_pmp_icc *icc;
++	unsigned int slot;
++	unsigned int soc_level;	/* aggregated from request tags */
++	u64 last;
++};
++
++struct apple_pmp_icc {
++	struct icc_provider provider;
++	struct device *report;
++	const struct apple_pmp_icc_soc *soc;
++	struct icc_onecell_data *onecell;
++};
++
++/*
++ * t6000/t6001: DVFS slots of the CPU clusters (soc-device order EACC0,
++ * PACC0, PACC1, which is also the order of the cpufreq policies) and of the
++ * first video encoder (AVE0).
++ */
++static const struct apple_pmp_icc_agent apple_pmp_icc_t600x_agents[] = {
++	{ APPLE_PMP_ICC_CPU_CLUSTER0, 0 },
++	{ APPLE_PMP_ICC_CPU_CLUSTER1, 1 },
++	{ APPLE_PMP_ICC_CPU_CLUSTER2, 2 },
++	{ APPLE_PMP_ICC_AVE0, 9 },
++};
++
++/*
++ * Measured on an M1 Max (t6001), CPU STREAM from one cluster's slot:
++ * FAB0 1 -> fabric p-state 7 (~128 GB/s for 10 threads), FAB0 2 -> 11
++ * (~146 GB/s), FAB0 3 + DCS 3 -> fabric 11, DCS 9 (~160 GB/s). Without a
++ * request the PMP keeps fabric 3 / DCS 7 (~55 GB/s) under CPU load.
++ */
++static const struct apple_pmp_icc_step apple_pmp_icc_t600x_steps[] = {
++	{ 64000000, APPLE_PMP_DVFS_FAB(0, 1) },
++	{ 128000000, APPLE_PMP_DVFS_FAB(0, 2) },
++	{ U32_MAX, APPLE_PMP_DVFS_FAB(0, 3) | APPLE_PMP_DVFS_DCS(3) },
++};
++
++static const struct apple_pmp_icc_soc apple_pmp_icc_t600x = {
++	.agents = apple_pmp_icc_t600x_agents,
++	.n_agents = ARRAY_SIZE(apple_pmp_icc_t600x_agents),
++	.steps = apple_pmp_icc_t600x_steps,
++	.n_steps = ARRAY_SIZE(apple_pmp_icc_t600x_steps),
++};
++
++static u64 apple_pmp_icc_value(const struct apple_pmp_icc_soc *soc, u32 kbps,
++			       unsigned int soc_level)
++{
++	u64 val = APPLE_PMP_DVFS_VALID;
++	unsigned int i;
++
++	if (kbps) {
++		for (i = 0; i < soc->n_steps - 1 && kbps > soc->steps[i].max_kbps; i++)
++			;
++		val |= soc->steps[i].levels;
++	}
++	return val | APPLE_PMP_DVFS_SOC(soc_level);
++}
++
++static void apple_pmp_icc_pre_aggregate(struct icc_node *node)
++{
++	struct apple_pmp_icc_node *an = node->data;
++
++	if (an)
++		an->soc_level = 0;
++}
++
++static int apple_pmp_icc_aggregate(struct icc_node *node, u32 tag, u32 avg_bw,
++				   u32 peak_bw, u32 *agg_avg, u32 *agg_peak)
++{
++	struct apple_pmp_icc_node *an = node->data;
++
++	if (an && (avg_bw || peak_bw))
++		an->soc_level = max(an->soc_level, tag & APPLE_PMP_ICC_TAG_SOC_MASK);
++	return icc_std_aggregate(node, tag, avg_bw, peak_bw, agg_avg, agg_peak);
++}
++
++static int apple_pmp_icc_set(struct icc_node *src, struct icc_node *dst)
++{
++	struct apple_pmp_icc_node *an = src->data;
++	u64 val;
++	int ret;
++
++	if (!an)
++		return 0;
++	val = apple_pmp_icc_value(an->icc->soc, max(src->avg_bw, src->peak_bw), an->soc_level);
++	if (val == an->last)
++		return 0;
++	ret = apple_pmp_dvfs_request(an->icc->report, an->slot, val);
++	if (ret == -EAGAIN)	/* PMP not running: nothing to vote to */
++		return 0;
++	if (!ret)
++		an->last = val;
++	return ret;
++}
++
++static int apple_pmp_icc_get_bw(struct icc_node *node, u32 *avg, u32 *peak)
++{
++	*avg = 0;
++	*peak = 0;
++	return 0;
++}
++
++static int apple_pmp_icc_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	const struct apple_pmp_icc_soc *soc;
++	struct icc_provider *provider;
++	struct apple_pmp_icc *icc;
++	struct icc_node *dram, *node;
++	unsigned int i;
++	int ret;
++
++	/* t6002 has two dies' worth of clusters and agents: not described yet */
++	if (of_machine_is_compatible("apple,t6000") || of_machine_is_compatible("apple,t6001"))
++		soc = &apple_pmp_icc_t600x;
++	else
++		return -ENODEV;
++
++	if (!dev->parent || apple_pmp_dvfs_slots(dev->parent) == 0)
++		return -ENODEV;
++
++	icc = devm_kzalloc(dev, sizeof(*icc), GFP_KERNEL);
++	if (!icc)
++		return -ENOMEM;
++	icc->report = dev->parent;
++	icc->soc = soc;
++	icc->onecell = devm_kzalloc(dev, struct_size(icc->onecell, nodes, soc->n_agents + 1),
++				    GFP_KERNEL);
++	if (!icc->onecell)
++		return -ENOMEM;
++	icc->onecell->num_nodes = soc->n_agents + 1;
++
++	provider = &icc->provider;
++	provider->dev = dev;
++	provider->set = apple_pmp_icc_set;
++	provider->pre_aggregate = apple_pmp_icc_pre_aggregate;
++	provider->aggregate = apple_pmp_icc_aggregate;
++	provider->get_bw = apple_pmp_icc_get_bw;
++	provider->xlate = of_icc_xlate_onecell;
++	provider->data = icc->onecell;
++	icc_provider_init(provider);
++
++	dram = icc_node_create(APPLE_PMP_ICC_DRAM_ID);
++	if (IS_ERR(dram))
++		return PTR_ERR(dram);
++	dram->name = APPLE_PMP_ICC_DRAM;
++	icc_node_add(dram, provider);
++	icc->onecell->nodes[soc->n_agents] = dram;
++
++	for (i = 0; i < soc->n_agents; i++) {
++		struct apple_pmp_icc_node *an;
++
++		if (soc->agents[i].slot >= apple_pmp_dvfs_slots(icc->report)) {
++			ret = -EINVAL;
++			goto err;
++		}
++		an = devm_kzalloc(dev, sizeof(*an), GFP_KERNEL);
++		if (!an) {
++			ret = -ENOMEM;
++			goto err;
++		}
++		an->icc = icc;
++		an->slot = soc->agents[i].slot;
++
++		node = icc_node_create(APPLE_PMP_ICC_ID_BASE + i);
++		if (IS_ERR(node)) {
++			ret = PTR_ERR(node);
++			goto err;
++		}
++		node->name = soc->agents[i].name;
++		node->data = an;
++		icc_node_add(node, provider);
++		ret = icc_link_create(node, APPLE_PMP_ICC_DRAM_ID);
++		if (ret)
++			goto err;
++		icc->onecell->nodes[i] = node;
++	}
++
++	ret = icc_provider_register(provider);
++	if (ret)
++		goto err;
++
++	platform_set_drvdata(pdev, icc);
++	dev_info(dev, "%u agents\n", soc->n_agents);
++	return 0;
++
++err:
++	icc_nodes_remove(provider);
++	return ret;
++}
++
++/*
++ * Built in and never unbound: consumers hold paths into this provider, and
++ * the dashboard it writes belongs to the (built-in) report driver.
++ */
++static struct platform_driver apple_pmp_icc_driver = {
++	.probe = apple_pmp_icc_probe,
++	.driver = {
++		.name = "apple-pmp-icc",
++		.suppress_bind_attrs = true,
++	},
++};
++builtin_platform_driver(apple_pmp_icc_driver);
+diff --git a/drivers/pmdomain/apple/pmp-report.c b/drivers/pmdomain/apple/pmp-report.c
+index 67b443508..b1194f0eb 100644
+--- a/drivers/pmdomain/apple/pmp-report.c
++++ b/drivers/pmdomain/apple/pmp-report.c
+@@ -138,6 +138,11 @@ static void apple_pmp_dvfs_all(struct apple_pmp_report *rep, bool restore)
+ 	spin_unlock_irqrestore(&rep->lock, flags);
+ }
+ 
++static void apple_pmp_report_unregister(void *data)
++{
++	platform_device_unregister(data);
++}
++
+ static int apple_pmp_report_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -165,6 +170,18 @@ static int apple_pmp_report_probe(struct platform_device *pdev)
+ 	if (ret)
+ 		return dev_err_probe(dev, ret, "failed to create child devices\n");
+ 
++	/* The interconnect provider that writes the DVFS requests */
++	if (IS_ENABLED(CONFIG_INTERCONNECT_APPLE_PMP) && rep->dvfs) {
++		struct platform_device *icc;
++
++		icc = platform_device_register_data(dev, "apple-pmp-icc", PLATFORM_DEVID_AUTO,
++						    NULL, 0);
++		if (IS_ERR(icc))
++			dev_warn(dev, "no interconnect provider: %pe\n", icc);
++		else
++			devm_add_action_or_reset(dev, apple_pmp_report_unregister, icc);
++	}
++
+ 	return 0;
+ }
+ 
+diff --git a/include/linux/soc/apple/pmp-icc.h b/include/linux/soc/apple/pmp-icc.h
+new file mode 100644
+index 000000000..54597037d
+--- /dev/null
++++ b/include/linux/soc/apple/pmp-icc.h
+@@ -0,0 +1,20 @@
++/* SPDX-License-Identifier: GPL-2.0-only OR MIT */
++/*
++ * Apple SoC PMP interconnect provider: node names and request tags
++ */
++
++#ifndef _LINUX_SOC_APPLE_PMP_ICC_H_
++#define _LINUX_SOC_APPLE_PMP_ICC_H_
++
++/* Paths go from an agent node to the DRAM node: icc_get(dev, agent, DRAM). */
++#define APPLE_PMP_ICC_DRAM		"apple-pmp-dram"
++#define APPLE_PMP_ICC_CPU_CLUSTER0	"apple-pmp-cpu-cluster0"
++#define APPLE_PMP_ICC_CPU_CLUSTER1	"apple-pmp-cpu-cluster1"
++#define APPLE_PMP_ICC_CPU_CLUSTER2	"apple-pmp-cpu-cluster2"
++#define APPLE_PMP_ICC_AVE0		"apple-pmp-ave0"
++
++/* icc_set_tag(): the minimum SoC level (0-3) the agent needs while it has bandwidth. */
++#define APPLE_PMP_ICC_TAG_SOC_MASK	0x3
++#define APPLE_PMP_ICC_TAG_SOC(l)	((l) & APPLE_PMP_ICC_TAG_SOC_MASK)
++
++#endif /* _LINUX_SOC_APPLE_PMP_ICC_H_ */
+-- 
+2.56.0
+

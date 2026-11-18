@@ -1,0 +1,600 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: aquarat <3090997+aquarat@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 10:34:18 +0000
+Subject: [PATCH 34/34] soc: apple: Add CPU cluster memory-bandwidth votes
+
+With the PMP running, a streaming CPU gets the lowest fabric and DRAM
+controller levels unless its cluster asks for more: on an M1 Max, CPU
+STREAM bandwidth with the PMP running is half of what it is without it
+(55/67 against 110/133 GB/s copy/triad, 10 threads; 25/29 against 52/71
+with one thread). A request from each cluster's slot gives 160/165 and,
+per cluster, 76/82 GB/s.
+
+Holding the request all the time costs nothing measurable at idle, but
+about 2.4 W under compute-bound load (sha256 on 10 threads, same
+throughput), so it has to follow memory demand rather than CPU load.
+Every 10 ms, for each CPU that was busy for at least half the period at
+no less than 60% of its maximum frequency, read its L1D load misses and
+active cycles from the CPU PMU. A cluster with a CPU at or above 10
+misses per 1000 cycles (STREAM: 56-205; sha256: about 1) requests
+200 GB/s from the PMP interconnect provider, and drops the request 100 ms
+after its last such sample. Idle CPUs are not touched, and nothing is
+sampled while the PMP is not running.
+
+Measured on an M1 Max: STREAM 160-164 GB/s for 10 threads and 76/82
+GB/s for one thread on either performance cluster; idle and sha256
+power equal to no requests (25.6 against 25.9 W).
+
+"mode" (auto, off, force) switches the requests off or holds them, for
+A/B measurements; the thresholds are module parameters, and the
+device's "stats" attribute shows each cluster's state and time with a
+request. The interconnect provider registers the device once it has the
+clusters' nodes (t6000/t6001); the driver is a module, loaded by its
+platform alias.
+
+Assisted-by: Claude:claude-opus-5-5
+Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
+---
+ drivers/interconnect/apple/pmp-icc.c |  10 +
+ drivers/soc/apple/Kconfig            |  14 +
+ drivers/soc/apple/Makefile           |   3 +
+ drivers/soc/apple/cpu-memvote.c      | 490 +++++++++++++++++++++++++++
+ 4 files changed, 517 insertions(+)
+ create mode 100644 drivers/soc/apple/cpu-memvote.c
+
+diff --git a/drivers/interconnect/apple/pmp-icc.c b/drivers/interconnect/apple/pmp-icc.c
+index face9ca93..896ce7ae8 100644
+--- a/drivers/interconnect/apple/pmp-icc.c
++++ b/drivers/interconnect/apple/pmp-icc.c
+@@ -223,6 +223,16 @@ static int apple_pmp_icc_probe(struct platform_device *pdev)
+ 
+ 	platform_set_drvdata(pdev, icc);
+ 	dev_info(dev, "%u agents\n", soc->n_agents);
++
++	/* The CPU clusters' bandwidth votes (apple-cpu-memvote), a consumer */
++	if (IS_ENABLED(CONFIG_APPLE_CPU_MEMVOTE)) {
++		struct platform_device *mv;
++
++		mv = platform_device_register_data(dev, "apple-cpu-memvote", PLATFORM_DEVID_AUTO,
++						   NULL, 0);
++		if (IS_ERR(mv))
++			dev_warn(dev, "no CPU memory-bandwidth votes: %pe\n", mv);
++	}
+ 	return 0;
+ 
+ err:
+diff --git a/drivers/soc/apple/Kconfig b/drivers/soc/apple/Kconfig
+index 51b07fe0f..99dfa99bf 100644
+--- a/drivers/soc/apple/Kconfig
++++ b/drivers/soc/apple/Kconfig
+@@ -124,6 +124,20 @@ config APPLE_PMP
+ 
+ 	  Say 'y' here if you have an Apple SoC.
+ 
++config APPLE_CPU_MEMVOTE
++	tristate "Apple SoC CPU cluster memory-bandwidth votes"
++	depends on ARCH_APPLE || COMPILE_TEST
++	depends on INTERCONNECT_APPLE_PMP && CPU_FREQ && PERF_EVENTS
++	default m if ARCH_APPLE
++	help
++	  With the power management processor (PMP) running, the fabric and
++	  DRAM controller stay at low performance levels unless an agent asks
++	  for more, which halves CPU memory bandwidth. This driver asks for
++	  bandwidth for each CPU cluster while it is memory-bound (busy, at a
++	  high frequency and missing its L1 data cache often, per the CPU
++	  PMU), so streaming code gets full bandwidth and idle or
++	  compute-bound CPUs keep the PMP's power savings.
++
+ endmenu
+ 
+ endif
+diff --git a/drivers/soc/apple/Makefile b/drivers/soc/apple/Makefile
+index 1baa6de94..6d16e2975 100644
+--- a/drivers/soc/apple/Makefile
++++ b/drivers/soc/apple/Makefile
+@@ -25,3 +25,6 @@ obj-$(CONFIG_APPLE_AOP) += aop.o
+ obj-$(CONFIG_APPLE_SEP) += sep.o
+ 
+ obj-$(CONFIG_APPLE_PMP) += pmp.o
++
++obj-$(CONFIG_APPLE_CPU_MEMVOTE) += apple-cpu-memvote.o
++apple-cpu-memvote-y = cpu-memvote.o
+diff --git a/drivers/soc/apple/cpu-memvote.c b/drivers/soc/apple/cpu-memvote.c
+new file mode 100644
+index 000000000..b4177d53b
+--- /dev/null
++++ b/drivers/soc/apple/cpu-memvote.c
+@@ -0,0 +1,490 @@
++// SPDX-License-Identifier: GPL-2.0-only OR MIT
++/*
++ * Apple SoC CPU cluster memory-bandwidth votes
++ *
++ * With the PMP running, the fabric and DRAM controller follow the agents'
++ * requests; the CPU clusters have their own request slots, and without a
++ * request a streaming CPU gets the lowest fabric/DCS levels: half the
++ * memory bandwidth of a machine without the PMP. Holding a request all
++ * the time costs ~2.4 W under compute-bound load on an M1 Max, and nothing
++ * at idle, so the request has to follow memory demand, not CPU load.
++ *
++ * Every period_ms this driver looks at each CPU that was busy for at least
++ * busy_pct of the period at no less than freq_pct of its maximum
++ * frequency, and counts its L1D load misses per 1000 active cycles (CPU
++ * PMU). A cluster with min_cpus such CPUs at or above mpkc misses asks the
++ * interconnect for bw_kbps; it drops the request hold_ms after the last
++ * such sample. Idle CPUs are not touched.
++ *
++ * "mode" switches between auto (the above), off (no requests) and force
++ * (always request), for A/B measurements.
++ *
++ * The interconnect provider registers this device when it has the CPU
++ * clusters' nodes (t6000/t6001). Clusters come from the device tree's
++ * cpu-map; CPU frequencies are read from cpufreq at each sample (a CPU
++ * without a policy yet never counts as memory-bound).
++ */
++
++#include <linux/cpufreq.h>
++#include <linux/cpuhotplug.h>
++#include <linux/cpumask.h>
++#include <linux/interconnect.h>
++#include <linux/ktime.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/perf_event.h>
++#include <linux/platform_device.h>
++#include <linux/slab.h>
++#include <linux/topology.h>
++#include <linux/soc/apple/pmp-icc.h>
++#include <linux/soc/apple/pmp-report.h>
++#include <linux/workqueue.h>
++
++#define MEMVOTE_MAX_CLUSTERS	3
++
++/* Asahi's apple_m1_cpu_pmu event numbers */
++#define M1_PMU_CORE_ACTIVE_CYCLE	0x02
++#define M1_PMU_L1D_CACHE_MISS_LD	0xa3
++
++enum { MEMVOTE_OFF, MEMVOTE_AUTO, MEMVOTE_FORCE };
++static const char * const memvote_modes[] = { "off", "auto", "force" };
++
++static int mode = MEMVOTE_AUTO;
++static unsigned int period_ms = 10;
++static unsigned int hold_ms = 100;
++static unsigned int busy_pct = 50;
++static unsigned int freq_pct = 60;
++static unsigned int mpkc = 10;
++static unsigned int min_cpus = 1;
++static unsigned int bw_kbps = 200000000;
++
++static DEFINE_MUTEX(memvote_active_lock);
++static struct memvote *memvote_active;
++static void memvote_kick(struct memvote *mv);
++
++static int mode_set(const char *val, const struct kernel_param *kp)
++{
++	int i = sysfs_match_string(memvote_modes, val);
++
++	if (i < 0)
++		return i;
++	WRITE_ONCE(mode, i);
++	/* act on the new mode now, not at the next (up to 1 s) sample */
++	mutex_lock(&memvote_active_lock);
++	if (memvote_active)
++		memvote_kick(memvote_active);
++	mutex_unlock(&memvote_active_lock);
++	return 0;
++}
++
++static int mode_get(char *buf, const struct kernel_param *kp)
++{
++	return sysfs_emit(buf, "%s\n", memvote_modes[READ_ONCE(mode)]);
++}
++
++static const struct kernel_param_ops mode_ops = { .set = mode_set, .get = mode_get };
++module_param_cb(mode, &mode_ops, NULL, 0644);
++MODULE_PARM_DESC(mode, "auto (follow memory demand, default), off, force");
++module_param(period_ms, uint, 0644);
++MODULE_PARM_DESC(period_ms, "sampling period (ms)");
++module_param(hold_ms, uint, 0644);
++MODULE_PARM_DESC(hold_ms, "keep a request this long after the last memory-bound sample (ms)");
++module_param(busy_pct, uint, 0644);
++MODULE_PARM_DESC(busy_pct, "a CPU counts only if busy for this % of the period");
++module_param(freq_pct, uint, 0644);
++MODULE_PARM_DESC(freq_pct, "... at this % of its maximum frequency or more");
++module_param(mpkc, uint, 0644);
++MODULE_PARM_DESC(mpkc, "... with this many L1D load misses per 1000 active cycles or more");
++module_param(min_cpus, uint, 0644);
++MODULE_PARM_DESC(min_cpus, "memory-bound CPUs a cluster needs to request bandwidth");
++module_param(bw_kbps, uint, 0644);
++MODULE_PARM_DESC(bw_kbps, "bandwidth a memory-bound cluster requests (kB/s)");
++
++struct memvote_cluster {
++	struct icc_path *path;
++	unsigned int first_cpu;
++	bool high;
++	u32 bw;			/* bandwidth of the request in place */
++	ktime_t last_busy;
++	u64 ups;
++	u64 ms_high;
++	ktime_t t_high;
++};
++
++struct memvote_cpu {
++	struct perf_event *cyc, *miss;
++	u64 prev_cyc, prev_miss, prev_idle, prev_wall;
++	bool stale;			/* prev_cyc/prev_miss are not from the last period */
++	bool recreate;			/* CPU went offline: perf dropped its events */
++	unsigned long next_try;		/* jiffies: when to retry creating the counters */
++	int cluster;
++};
++
++struct memvote {
++	struct device *dev;
++	struct device *report;
++	struct delayed_work work;
++	struct mutex lock;
++	struct memvote_cluster cl[MEMVOTE_MAX_CLUSTERS];
++	unsigned int n_cl;
++	struct memvote_cpu __percpu *cpu;
++	bool have_pmu;
++};
++
++static const char * const memvote_nodes[MEMVOTE_MAX_CLUSTERS] = {
++	APPLE_PMP_ICC_CPU_CLUSTER0, APPLE_PMP_ICC_CPU_CLUSTER1, APPLE_PMP_ICC_CPU_CLUSTER2,
++};
++
++static void memvote_set(struct memvote *mv, struct memvote_cluster *c, bool high)
++{
++	u32 bw = high ? READ_ONCE(bw_kbps) : 0;
++
++	/* also re-sends a held request when bw_kbps was changed meanwhile */
++	if (c->high == high && c->bw == bw)
++		return;
++	if (icc_set_bw(c->path, 0, bw))
++		return;
++	c->bw = bw;
++	if (c->high == high)
++		return;
++	c->high = high;
++	if (high) {
++		c->ups++;
++		c->t_high = ktime_get();
++	} else {
++		c->ms_high += ktime_ms_delta(ktime_get(), c->t_high);
++	}
++}
++
++static struct perf_event *memvote_counter(unsigned int cpu, u64 config);
++
++/*
++ * Counters for CPUs that came online after probe, whose creation failed
++ * (retried every 10 s), or that went offline since (perf removes a CPU's
++ * events then and does not reinstall them). Runs outside cpus_read_lock().
++ */
++static void memvote_fix_counters(struct memvote *mv)
++{
++	unsigned int cpu;
++
++	for_each_possible_cpu(cpu) {
++		struct memvote_cpu *mc = per_cpu_ptr(mv->cpu, cpu);
++
++		if (READ_ONCE(mc->recreate)) {
++			WRITE_ONCE(mc->recreate, false);
++			if (mc->cyc)
++				perf_event_release_kernel(mc->cyc);
++			if (mc->miss)
++				perf_event_release_kernel(mc->miss);
++			mc->cyc = mc->miss = NULL;
++			mc->next_try = jiffies;
++		}
++		if ((mc->cyc && mc->miss) || !cpu_online(cpu) || time_before(jiffies, mc->next_try))
++			continue;
++		mc->next_try = jiffies + 10 * HZ;
++		if (!mc->cyc)
++			mc->cyc = memvote_counter(cpu, M1_PMU_CORE_ACTIVE_CYCLE);
++		if (!mc->miss)
++			mc->miss = memvote_counter(cpu, M1_PMU_L1D_CACHE_MISS_LD);
++		mc->stale = true;
++	}
++}
++
++static bool memvote_cpu_bound(struct memvote *mv, unsigned int cpu)
++{
++	struct memvote_cpu *mc = per_cpu_ptr(mv->cpu, cpu);
++	u64 wall, idle = get_cpu_idle_time(cpu, &wall, 0);
++	u64 dw = wall - mc->prev_wall, di = idle - mc->prev_idle;
++	struct cpufreq_policy *pol;
++	u64 en, run, cyc, miss, dc, dm;
++	unsigned int cur, max;
++	bool stale;
++
++	mc->prev_wall = wall;
++	mc->prev_idle = idle;
++	/*
++	 * Idle or slow CPUs are not touched (no PMU read, which would need an
++	 * IPI); their counters then cover more than one period, so the next
++	 * read only rebaselines them.
++	 */
++	if (!dw || di > dw || (dw - di) * 100 < (u64)busy_pct * dw)
++		goto skip;
++
++	pol = cpufreq_cpu_get(cpu);
++	if (!pol)
++		goto skip;
++	cur = pol->cur;
++	max = pol->cpuinfo.max_freq;
++	cpufreq_cpu_put(pol);
++	if ((u64)cur * 100 < (u64)freq_pct * max)
++		goto skip;
++
++	/* without counters, never guess: a wrong "yes" costs watts */
++	if (!mc->cyc || !mc->miss)
++		return false;
++	cyc = perf_event_read_value(mc->cyc, &en, &run);
++	miss = perf_event_read_value(mc->miss, &en, &run);
++	dc = cyc - mc->prev_cyc;
++	dm = miss - mc->prev_miss;
++	mc->prev_cyc = cyc;
++	mc->prev_miss = miss;
++	stale = mc->stale;
++	mc->stale = false;
++	return !stale && dc && dm * 1000 >= (u64)mpkc * dc;
++
++skip:
++	mc->stale = true;
++	return false;
++}
++
++static void memvote_work(struct work_struct *work)
++{
++	struct memvote *mv = container_of(work, struct memvote, work.work);
++	unsigned int bound[MEMVOTE_MAX_CLUSTERS] = { 0 };
++	int m = READ_ONCE(mode);
++	ktime_t now = ktime_get();
++	unsigned int cpu, i;
++	unsigned long delay = msecs_to_jiffies(max(period_ms, 1U));
++
++	mutex_lock(&mv->lock);
++	if (!apple_pmp_dvfs_ready(mv->report) || m == MEMVOTE_OFF) {
++		for (i = 0; i < mv->n_cl; i++)
++			memvote_set(mv, &mv->cl[i], false);
++		/* nothing to vote to, or switched off: look again in a second */
++		delay = HZ;
++		goto out;
++	}
++	if (m == MEMVOTE_FORCE) {
++		for (i = 0; i < mv->n_cl; i++)
++			memvote_set(mv, &mv->cl[i], true);
++		delay = HZ;
++		goto out;
++	}
++
++	memvote_fix_counters(mv);
++	cpus_read_lock();
++	for_each_online_cpu(cpu) {
++		int c = per_cpu_ptr(mv->cpu, cpu)->cluster;
++
++		if (c >= 0 && memvote_cpu_bound(mv, cpu))
++			bound[c]++;
++	}
++	cpus_read_unlock();
++
++	for (i = 0; i < mv->n_cl; i++) {
++		struct memvote_cluster *c = &mv->cl[i];
++
++		if (bound[i] >= min_cpus) {
++			c->last_busy = now;
++			memvote_set(mv, c, true);
++		} else if (c->high && ktime_ms_delta(now, c->last_busy) >= hold_ms) {
++			memvote_set(mv, c, false);
++		}
++	}
++out:
++	mutex_unlock(&mv->lock);
++	queue_delayed_work(system_freezable_wq, &mv->work, delay);
++}
++
++static enum cpuhp_state memvote_hp_state;
++
++static int memvote_cpu_offline(unsigned int cpu)
++{
++	mutex_lock(&memvote_active_lock);
++	if (memvote_active)
++		WRITE_ONCE(per_cpu_ptr(memvote_active->cpu, cpu)->recreate, true);
++	mutex_unlock(&memvote_active_lock);
++	return 0;
++}
++
++static void memvote_kick(struct memvote *mv)
++{
++	mod_delayed_work(system_freezable_wq, &mv->work, 0);
++}
++
++static ssize_t stats_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct memvote *mv = dev_get_drvdata(dev);
++	ssize_t n = 0;
++	unsigned int i;
++
++	mutex_lock(&mv->lock);
++	for (i = 0; i < mv->n_cl; i++) {
++		struct memvote_cluster *c = &mv->cl[i];
++		u64 ms = c->ms_high + (c->high ? ktime_ms_delta(ktime_get(), c->t_high) : 0);
++
++		n += sysfs_emit_at(buf, n, "cluster%u cpu%u high %d ups %llu ms_high %llu\n",
++				   i, c->first_cpu, c->high, c->ups, ms);
++	}
++	n += sysfs_emit_at(buf, n, "pmu %d pmp %d\n", mv->have_pmu,
++			   apple_pmp_dvfs_ready(mv->report));
++	mutex_unlock(&mv->lock);
++	return n;
++}
++static DEVICE_ATTR_RO(stats);
++
++static struct attribute *memvote_attrs[] = {
++	&dev_attr_stats.attr,
++	NULL
++};
++ATTRIBUTE_GROUPS(memvote);
++
++static struct perf_event *memvote_counter(unsigned int cpu, u64 config)
++{
++	struct perf_event_attr attr = {
++		.type = PERF_TYPE_RAW,
++		.size = sizeof(attr),
++		.config = config,
++		.pinned = 1,
++	};
++	struct perf_event *e = perf_event_create_kernel_counter(&attr, cpu, NULL, NULL, NULL);
++
++	return IS_ERR(e) ? NULL : e;
++}
++
++static void memvote_free(struct memvote *mv)
++{
++	unsigned int cpu, i;
++
++	for (i = 0; i < mv->n_cl; i++)
++		if (!IS_ERR_OR_NULL(mv->cl[i].path))
++			icc_put(mv->cl[i].path);
++	for_each_possible_cpu(cpu) {
++		struct memvote_cpu *mc = per_cpu_ptr(mv->cpu, cpu);
++
++		if (mc->cyc)
++			perf_event_release_kernel(mc->cyc);
++		if (mc->miss)
++			perf_event_release_kernel(mc->miss);
++	}
++}
++
++static int memvote_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct memvote *mv;
++	unsigned int cpu, i;
++	int ret;
++
++	mv = devm_kzalloc(dev, sizeof(*mv), GFP_KERNEL);
++	if (!mv)
++		return -ENOMEM;
++	mv->dev = dev;
++	/* parent: the apple-pmp-icc provider; its parent: the PMP report device */
++	if (!dev->parent || !dev->parent->parent)
++		return -ENODEV;
++	mv->report = dev->parent->parent;
++	mutex_init(&mv->lock);
++	mv->cpu = devm_alloc_percpu(dev, struct memvote_cpu);
++	if (!mv->cpu)
++		return -ENOMEM;
++	for_each_possible_cpu(cpu)
++		per_cpu_ptr(mv->cpu, cpu)->cluster = -1;
++
++	/*
++	 * Clusters from the device tree's cpu-map (cluster0 = E, cluster1/2 =
++	 * the P clusters on t6000/t6001, the order of their request slots), so
++	 * CPUs that are offline now still map to the right cluster and no
++	 * cpufreq policy is needed yet.
++	 */
++	for (i = 0; i < MEMVOTE_MAX_CLUSTERS; i++)
++		mv->cl[i].first_cpu = UINT_MAX;
++	for_each_possible_cpu(cpu) {
++		int c = topology_cluster_id(cpu);
++
++		if (c < 0 || c >= MEMVOTE_MAX_CLUSTERS)
++			return dev_err_probe(dev, -ENODEV, "cpu%u: cluster %d unknown\n", cpu, c);
++		per_cpu_ptr(mv->cpu, cpu)->cluster = c;
++		mv->cl[c].first_cpu = min(mv->cl[c].first_cpu, cpu);
++		mv->n_cl = max_t(unsigned int, mv->n_cl, c + 1);
++	}
++
++	for (i = 0; i < mv->n_cl; i++) {
++		mv->cl[i].path = icc_get(dev, memvote_nodes[i], APPLE_PMP_ICC_DRAM);
++		if (IS_ERR_OR_NULL(mv->cl[i].path)) {
++			ret = mv->cl[i].path ? PTR_ERR(mv->cl[i].path) : -ENODEV;
++			mv->cl[i].path = NULL;
++			memvote_free(mv);
++			return dev_err_probe(dev, ret, "no interconnect path for cluster %u\n", i);
++		}
++	}
++
++	mv->have_pmu = true;
++	for_each_online_cpu(cpu) {
++		struct memvote_cpu *mc = per_cpu_ptr(mv->cpu, cpu);
++
++		mc->cyc = memvote_counter(cpu, M1_PMU_CORE_ACTIVE_CYCLE);
++		mc->miss = memvote_counter(cpu, M1_PMU_L1D_CACHE_MISS_LD);
++		mc->stale = true;
++		mc->next_try = jiffies + 10 * HZ;
++		if (!mc->cyc || !mc->miss)
++			mv->have_pmu = false;
++	}
++	if (!mv->have_pmu)
++		dev_warn(dev, "CPU PMU counters unavailable on some CPUs (retried every 10 s); those CPUs never count as memory-bound\n");
++
++	platform_set_drvdata(pdev, mv);
++	INIT_DELAYED_WORK(&mv->work, memvote_work);
++	queue_delayed_work(system_freezable_wq, &mv->work, 1);
++	mutex_lock(&memvote_active_lock);
++	memvote_active = mv;
++	mutex_unlock(&memvote_active_lock);
++	ret = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN, "soc/apple-cpu-memvote:online",
++					NULL, memvote_cpu_offline);
++	if (ret < 0)
++		dev_warn(dev, "no CPU hotplug callback (%d): counters of CPUs taken offline stop\n", ret);
++	else
++		memvote_hp_state = ret;
++	dev_info(dev, "%u clusters, mode %s\n", mv->n_cl, memvote_modes[READ_ONCE(mode)]);
++	return 0;
++}
++
++static void memvote_stop(struct memvote *mv)
++{
++	unsigned int i;
++
++	cancel_delayed_work_sync(&mv->work);
++	mutex_lock(&mv->lock);
++	for (i = 0; i < mv->n_cl; i++)
++		memvote_set(mv, &mv->cl[i], false);
++	mutex_unlock(&mv->lock);
++}
++
++static void memvote_remove(struct platform_device *pdev)
++{
++	struct memvote *mv = platform_get_drvdata(pdev);
++
++	if (memvote_hp_state > 0)
++		cpuhp_remove_state_nocalls(memvote_hp_state);
++	memvote_hp_state = 0;
++	mutex_lock(&memvote_active_lock);
++	memvote_active = NULL;
++	mutex_unlock(&memvote_active_lock);
++
++	memvote_stop(mv);
++	memvote_free(mv);
++}
++
++static void memvote_shutdown(struct platform_device *pdev)
++{
++	struct memvote *mv = platform_get_drvdata(pdev);
++
++	if (mv)
++		memvote_stop(mv);
++}
++
++static struct platform_driver memvote_driver = {
++	.probe = memvote_probe,
++	.remove = memvote_remove,
++	.shutdown = memvote_shutdown,
++	.driver = {
++		.name = "apple-cpu-memvote",
++		.dev_groups = memvote_groups,
++	},
++};
++module_platform_driver(memvote_driver);
++
++MODULE_ALIAS("platform:apple-cpu-memvote");
++MODULE_SOFTDEP("pre: apple-soc-cpufreq");
++MODULE_DESCRIPTION("Apple SoC CPU cluster memory-bandwidth votes");
++MODULE_LICENSE("Dual MIT/GPL");
+-- 
+2.56.0
+

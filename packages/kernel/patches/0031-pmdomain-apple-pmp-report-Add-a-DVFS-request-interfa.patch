@@ -1,0 +1,292 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: aquarat <3090997+aquarat@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 10:30:41 +0000
+Subject: [PATCH 31/34] pmdomain: apple: pmp-report: Add a DVFS request
+ interface
+
+Besides the power-state bitmaps, the PMP's shared dashboard holds one
+64-bit DVFS request per SoC agent: the SoC level, four fabric levels,
+the DRAM controller (DCS) level and a valid bit. The PMP sets the SoC,
+fabric and DCS performance states from these requests and from its own
+monitors. Linux writes none of them today, so with the PMP running the
+fabric and DRAM controller stay at their lowest levels under CPU load:
+on an M1 Max, CPU STREAM bandwidth halves compared with the PMP not
+running (110/133 -> 55/67 GB/s copy/triad, 10 threads).
+
+Add apple_pmp_dvfs_request(), which writes an agent's request into its
+slot, and apple_pmp_dvfs_slots(). The window is already mapped by this
+driver (non-posted, as everything under /soc). Requests are only
+written, never read back: reading a slot while the PMP has not yet
+consumed a write makes it drop that request. Each slot is meant to have
+one owner; unchanged values are not written again, and nothing is
+written while the PMP is not running. All requests are withdrawn
+across system sleep and at shutdown and restored on resume.
+
+The slot layout (SOC-DEV-DVFS, dashboard indices 264-303) is known for
+t600x only; other SoCs report no slots. The slot of an agent is the
+position of its soc-device record, among those that have a DVFS slot,
+in the ADT's iop-pmp-nub.
+
+Assisted-by: Claude:claude-opus-5-5
+Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
+---
+ drivers/pmdomain/apple/pmp-report.c  | 143 +++++++++++++++++++++++++++
+ include/linux/soc/apple/pmp-report.h |  49 +++++++++
+ 2 files changed, 192 insertions(+)
+ create mode 100644 include/linux/soc/apple/pmp-report.h
+
+diff --git a/drivers/pmdomain/apple/pmp-report.c b/drivers/pmdomain/apple/pmp-report.c
+index 2d60a4a48..67b443508 100644
+--- a/drivers/pmdomain/apple/pmp-report.c
++++ b/drivers/pmdomain/apple/pmp-report.c
+@@ -12,14 +12,24 @@
+ #include <linux/of_platform.h>
+ #include <linux/platform_device.h>
+ #include <linux/pm_domain.h>
++#include <linux/soc/apple/pmp-report.h>
+ 
+ #define PMP_REPORT_READY 0x1
+ 
++/*
++ * The report window is the PMP's shared dashboard. Entries are read at
++ * base + 16 * index and written at base + 0x10000 + 8 * index. Besides the
++ * power-state bitmaps (tgt_*, actual, status), it holds one 64-bit DVFS
++ * request ("vote") per SoC agent, indexed by the agent's slot: the n-th
++ * soc-device record in the ADT's iop-pmp-nub that has a DVFS slot.
++ */
+ struct apple_pmp_report_offsets {
+ 	u32 tgt_read;
+ 	u32 tgt_write;
+ 	u32 actual;
+ 	u32 status;
++	u32 dvfs_write;		/* write side of DVFS slot 0; 0 = not supported */
++	u32 n_dvfs;
+ };
+ 
+ struct apple_pmp_report {
+@@ -27,8 +37,107 @@ struct apple_pmp_report {
+ 	const struct apple_pmp_report_offsets *offsets;
+ 	void __iomem *base;
+ 	spinlock_t lock;
++	u64 *dvfs;		/* last value requested per slot, 0 = never written */
+ };
+ 
++static bool apple_pmp_report_ready(struct apple_pmp_report *rep)
++{
++	return readq(rep->base + rep->offsets->status) & PMP_REPORT_READY;
++}
++
++/* rep->lock held */
++static void apple_pmp_dvfs_write(struct apple_pmp_report *rep, unsigned int slot, u64 val)
++{
++	/*
++	 * Write only. Reading an entry back while the PMP has not consumed a
++	 * write yet makes it drop that request, so nothing here reads slots.
++	 */
++	writeq(val, rep->base + rep->offsets->dvfs_write + 8 * slot);
++}
++
++/**
++ * apple_pmp_dvfs_slots() - number of DVFS request slots of a PMP report device
++ * @dev: the apple-pmp-report device
++ *
++ * Return: the number of slots, 0 if this SoC's request slots are unknown.
++ */
++unsigned int apple_pmp_dvfs_slots(struct device *dev)
++{
++	struct apple_pmp_report *rep = dev_get_drvdata(dev);
++
++	return rep && rep->dvfs ? rep->offsets->n_dvfs : 0;
++}
++EXPORT_SYMBOL_GPL(apple_pmp_dvfs_slots);
++
++/**
++ * apple_pmp_dvfs_ready() - whether the PMP is running and takes requests
++ * @dev: the apple-pmp-report device
++ */
++bool apple_pmp_dvfs_ready(struct device *dev)
++{
++	struct apple_pmp_report *rep = dev_get_drvdata(dev);
++
++	return rep && rep->dvfs && apple_pmp_report_ready(rep);
++}
++EXPORT_SYMBOL_GPL(apple_pmp_dvfs_ready);
++
++/**
++ * apple_pmp_dvfs_request() - set an agent's DVFS request to the PMP
++ * @dev: the apple-pmp-report device
++ * @slot: the agent's DVFS slot
++ * @val: APPLE_PMP_DVFS_VALID with the requested levels, or
++ *       APPLE_PMP_DVFS_VALID alone to withdraw the request
++ *
++ * Each slot must have a single owner. Unchanged values are not written
++ * again. Nothing is written while the PMP is not running (-EAGAIN).
++ *
++ * Return: 0 on success, -EINVAL for a bad slot or value, -EAGAIN if the
++ * PMP is not running.
++ */
++int apple_pmp_dvfs_request(struct device *dev, unsigned int slot, u64 val)
++{
++	struct apple_pmp_report *rep = dev_get_drvdata(dev);
++	unsigned long flags;
++	int ret = 0;
++
++	if (!rep || !rep->dvfs || slot >= rep->offsets->n_dvfs)
++		return -EINVAL;
++	if (!(val & APPLE_PMP_DVFS_VALID) || (val & ~APPLE_PMP_DVFS_MASK))
++		return -EINVAL;
++
++	spin_lock_irqsave(&rep->lock, flags);
++	if (rep->dvfs[slot] == val)
++		goto out;
++	if (!apple_pmp_report_ready(rep)) {
++		ret = -EAGAIN;
++		goto out;
++	}
++	apple_pmp_dvfs_write(rep, slot, val);
++	rep->dvfs[slot] = val;
++out:
++	spin_unlock_irqrestore(&rep->lock, flags);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(apple_pmp_dvfs_request);
++
++/* Withdraw (release) or restore every request this driver has written. */
++static void apple_pmp_dvfs_all(struct apple_pmp_report *rep, bool restore)
++{
++	unsigned long flags;
++	unsigned int i;
++
++	if (!rep->dvfs)
++		return;
++	spin_lock_irqsave(&rep->lock, flags);
++	if (apple_pmp_report_ready(rep)) {
++		for (i = 0; i < rep->offsets->n_dvfs; i++)
++			if (rep->dvfs[i] && rep->dvfs[i] != APPLE_PMP_DVFS_VALID)
++				apple_pmp_dvfs_write(rep, i, restore ? rep->dvfs[i] :
++						     APPLE_PMP_DVFS_VALID);
++	}
++	spin_unlock_irqrestore(&rep->lock, flags);
++}
++
+ static int apple_pmp_report_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -46,6 +155,11 @@ static int apple_pmp_report_probe(struct platform_device *pdev)
+ 	if (IS_ERR(rep->base))
+ 		return PTR_ERR(rep->base);
+ 	rep->offsets = of_device_get_match_data(dev);
++	if (rep->offsets->n_dvfs) {
++		rep->dvfs = devm_kcalloc(dev, rep->offsets->n_dvfs, sizeof(*rep->dvfs), GFP_KERNEL);
++		if (!rep->dvfs)
++			return -ENOMEM;
++	}
+ 	dev_set_drvdata(dev, rep);
+ 	ret = of_platform_populate(np, NULL, NULL, dev);
+ 	if (ret)
+@@ -59,6 +173,9 @@ static const struct apple_pmp_report_offsets apple_pmp_offsets_t600x = {
+ 	.tgt_write = 0x107c0,
+ 	.actual = 0x1000,
+ 	.status = 0x10,
++	/* SOC-DEV-DVFS: indices 264..303 (ADT iop-pmp-nub ptd-range) */
++	.dvfs_write = 0x10000 + 8 * 264,
++	.n_dvfs = 40,
+ };
+ 
+ static const struct apple_pmp_report_offsets apple_pmp_offsets_t602x = {
+@@ -98,11 +215,37 @@ static const struct of_device_id apple_pmp_report_of_match[] = {
+ 	{}
+ };
+ 
++/*
++ * Requests are withdrawn across system sleep and at shutdown, so a vote
++ * never outlives the agents that made it; they are put back on resume.
++ */
++static int apple_pmp_report_suspend(struct device *dev)
++{
++	apple_pmp_dvfs_all(dev_get_drvdata(dev), false);
++	return 0;
++}
++
++static int apple_pmp_report_resume(struct device *dev)
++{
++	apple_pmp_dvfs_all(dev_get_drvdata(dev), true);
++	return 0;
++}
++
++static DEFINE_SIMPLE_DEV_PM_OPS(apple_pmp_report_pm_ops, apple_pmp_report_suspend,
++				apple_pmp_report_resume);
++
++static void apple_pmp_report_shutdown(struct platform_device *pdev)
++{
++	apple_pmp_dvfs_all(platform_get_drvdata(pdev), false);
++}
++
+ static struct platform_driver apple_pmp_report_driver = {
+ 	.probe = apple_pmp_report_probe,
++	.shutdown = apple_pmp_report_shutdown,
+ 	.driver = {
+ 		.name = "apple-pmp-report",
+ 		.of_match_table = apple_pmp_report_of_match,
++		.pm = pm_sleep_ptr(&apple_pmp_report_pm_ops),
+ 	},
+ };
+ 
+diff --git a/include/linux/soc/apple/pmp-report.h b/include/linux/soc/apple/pmp-report.h
+new file mode 100644
+index 000000000..aba08e148
+--- /dev/null
++++ b/include/linux/soc/apple/pmp-report.h
+@@ -0,0 +1,49 @@
++/* SPDX-License-Identifier: GPL-2.0-only OR MIT */
++/*
++ * Apple SoC PMP dashboard: DVFS requests
++ */
++
++#ifndef _LINUX_SOC_APPLE_PMP_REPORT_H_
++#define _LINUX_SOC_APPLE_PMP_REPORT_H_
++
++#include <linux/bits.h>
++#include <linux/errno.h>
++#include <linux/types.h>
++
++struct device;
++
++/*
++ * A DVFS request is one 64-bit word per agent: the SoC level in bits 3:0,
++ * the four fabric levels in bits 35:32, 39:36, 43:40 and 47:44, the DRAM
++ * controller (DCS) level in bits 51:48, and a valid bit. The valid bit
++ * alone withdraws the request. Levels are small indices (0 = lowest).
++ */
++#define APPLE_PMP_DVFS_VALID		BIT_ULL(61)
++#define APPLE_PMP_DVFS_SOC(l)		((u64)((l) & 0xf))
++#define APPLE_PMP_DVFS_FAB(n, l)	((u64)((l) & 0xf) << (32 + 4 * (n)))
++#define APPLE_PMP_DVFS_DCS(l)		((u64)((l) & 0xf) << 48)
++#define APPLE_PMP_DVFS_MASK		(APPLE_PMP_DVFS_VALID | GENMASK_ULL(51, 32) | \
++					 GENMASK_ULL(3, 0))
++
++#ifdef CONFIG_APPLE_PMP_REPORT
++unsigned int apple_pmp_dvfs_slots(struct device *dev);
++bool apple_pmp_dvfs_ready(struct device *dev);
++int apple_pmp_dvfs_request(struct device *dev, unsigned int slot, u64 val);
++#else
++static inline unsigned int apple_pmp_dvfs_slots(struct device *dev)
++{
++	return 0;
++}
++
++static inline bool apple_pmp_dvfs_ready(struct device *dev)
++{
++	return false;
++}
++
++static inline int apple_pmp_dvfs_request(struct device *dev, unsigned int slot, u64 val)
++{
++	return -ENODEV;
++}
++#endif
++
++#endif /* _LINUX_SOC_APPLE_PMP_REPORT_H_ */
+-- 
+2.56.0
+

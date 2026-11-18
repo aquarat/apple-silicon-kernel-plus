@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: aquarat <3090997+aquarat@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 10:29:30 +0000
+Subject: [PATCH 30/34] pmdomain: apple: pmp-report: Use a 64-bit shift for the
+ entry bit
+
+The PS-REQ/PS-ACK words are 64 bits wide, but the entry's bit was made
+with "1 << ent->id", an int shift. That is undefined for ids of 31 and
+above, which t6002 uses for its second die's display entries (0x33,
+0x34). Use BIT_ULL().
+
+Assisted-by: Claude:claude-opus-5-5
+Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
+---
+ drivers/pmdomain/apple/pmp-report.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/pmdomain/apple/pmp-report.c b/drivers/pmdomain/apple/pmp-report.c
+index 39a10a0b6..2d60a4a48 100644
+--- a/drivers/pmdomain/apple/pmp-report.c
++++ b/drivers/pmdomain/apple/pmp-report.c
+@@ -119,7 +119,7 @@ static int apple_pmp_report_set_state(struct generic_pm_domain *genpd, bool enab
+ {
+ 	struct apple_pmp_report_entry *ent = genpd_to_apple_pmp_report_entry(genpd);
+ 	struct apple_pmp_report *rep = dev_get_drvdata(ent->dev->parent);
+-	u64 bit_val = 1 << ent->id;
++	u64 bit_val = BIT_ULL(ent->id);
+ 	u64 val;
+ 	unsigned long flags;
+ 
+-- 
+2.56.0
+
