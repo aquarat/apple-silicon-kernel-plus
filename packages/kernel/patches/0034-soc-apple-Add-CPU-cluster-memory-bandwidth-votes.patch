@@ -38,8 +38,8 @@ Signed-off-by: aquarat <3090997+aquarat@users.noreply.github.com>
  drivers/interconnect/apple/pmp-icc.c |  10 +
  drivers/soc/apple/Kconfig            |  14 +
  drivers/soc/apple/Makefile           |   3 +
- drivers/soc/apple/cpu-memvote.c      | 410 +++++++++++++++++++++++++++
- 4 files changed, 437 insertions(+)
+ drivers/soc/apple/cpu-memvote.c      | 444 +++++++++++++++++++++++++++
+ 4 files changed, 471 insertions(+)
  create mode 100644 drivers/soc/apple/cpu-memvote.c
 
 diff --git a/drivers/interconnect/apple/pmp-icc.c b/drivers/interconnect/apple/pmp-icc.c
@@ -101,10 +101,10 @@ index 1baa6de94..6d16e2975 100644
 +apple-cpu-memvote-y = cpu-memvote.o
 diff --git a/drivers/soc/apple/cpu-memvote.c b/drivers/soc/apple/cpu-memvote.c
 new file mode 100644
-index 000000000..9e8940cdf
+index 000000000..1324fdc05
 --- /dev/null
 +++ b/drivers/soc/apple/cpu-memvote.c
-@@ -0,0 +1,410 @@
+@@ -0,0 +1,444 @@
 +// SPDX-License-Identifier: GPL-2.0-only OR MIT
 +/*
 + * Apple SoC CPU cluster memory-bandwidth votes
@@ -216,6 +216,8 @@ index 000000000..9e8940cdf
 +struct memvote_cpu {
 +	struct perf_event *cyc, *miss;
 +	u64 prev_cyc, prev_miss, prev_idle, prev_wall;
++	bool stale;			/* prev_cyc/prev_miss are not from the last period */
++	unsigned long next_try;		/* jiffies: when to retry creating the counters */
 +	int cluster;
 +};
 +
@@ -249,6 +251,24 @@ index 000000000..9e8940cdf
 +	}
 +}
 +
++static struct perf_event *memvote_counter(unsigned int cpu, u64 config);
++
++/* Counters for a CPU that came online after probe, or whose creation failed; retried every 10 s. */
++static bool memvote_cpu_counters(struct memvote_cpu *mc, unsigned int cpu)
++{
++	if (mc->cyc && mc->miss)
++		return true;
++	if (time_before(jiffies, mc->next_try))
++		return false;
++	mc->next_try = jiffies + 10 * HZ;
++	if (!mc->cyc)
++		mc->cyc = memvote_counter(cpu, M1_PMU_CORE_ACTIVE_CYCLE);
++	if (!mc->miss)
++		mc->miss = memvote_counter(cpu, M1_PMU_L1D_CACHE_MISS_LD);
++	mc->stale = true;
++	return mc->cyc && mc->miss;
++}
++
 +static bool memvote_cpu_bound(struct memvote *mv, unsigned int cpu)
 +{
 +	struct memvote_cpu *mc = per_cpu_ptr(mv->cpu, cpu);
@@ -257,23 +277,29 @@ index 000000000..9e8940cdf
 +	struct cpufreq_policy *pol;
 +	u64 en, run, cyc, miss, dc, dm;
 +	unsigned int cur, max;
++	bool stale;
 +
 +	mc->prev_wall = wall;
 +	mc->prev_idle = idle;
++	/*
++	 * Idle or slow CPUs are not touched (no PMU read, which would need an
++	 * IPI); their counters then cover more than one period, so the next
++	 * read only rebaselines them.
++	 */
 +	if (!dw || di > dw || (dw - di) * 100 < (u64)busy_pct * dw)
-+		return false;
++		goto skip;
 +
 +	pol = cpufreq_cpu_get(cpu);
 +	if (!pol)
-+		return false;
++		goto skip;
 +	cur = pol->cur;
 +	max = pol->cpuinfo.max_freq;
 +	cpufreq_cpu_put(pol);
 +	if ((u64)cur * 100 < (u64)freq_pct * max)
-+		return false;
++		goto skip;
 +
 +	/* without counters, never guess: a wrong "yes" costs watts */
-+	if (!mc->cyc || !mc->miss)
++	if (!memvote_cpu_counters(mc, cpu))
 +		return false;
 +	cyc = perf_event_read_value(mc->cyc, &en, &run);
 +	miss = perf_event_read_value(mc->miss, &en, &run);
@@ -281,7 +307,13 @@ index 000000000..9e8940cdf
 +	dm = miss - mc->prev_miss;
 +	mc->prev_cyc = cyc;
 +	mc->prev_miss = miss;
-+	return dc && dm * 1000 >= (u64)mpkc * dc;
++	stale = mc->stale;
++	mc->stale = false;
++	return !stale && dc && dm * 1000 >= (u64)mpkc * dc;
++
++skip:
++	mc->stale = true;
++	return false;
 +}
 +
 +static void memvote_work(struct work_struct *work)
@@ -453,11 +485,13 @@ index 000000000..9e8940cdf
 +
 +		mc->cyc = memvote_counter(cpu, M1_PMU_CORE_ACTIVE_CYCLE);
 +		mc->miss = memvote_counter(cpu, M1_PMU_L1D_CACHE_MISS_LD);
++		mc->stale = true;
++		mc->next_try = jiffies + 10 * HZ;
 +		if (!mc->cyc || !mc->miss)
 +			mv->have_pmu = false;
 +	}
 +	if (!mv->have_pmu)
-+		dev_warn(dev, "CPU PMU counters unavailable: auto mode will not request bandwidth\n");
++		dev_warn(dev, "CPU PMU counters unavailable on some CPUs (retried every 10 s); those CPUs never count as memory-bound\n");
 +
 +	platform_set_drvdata(pdev, mv);
 +	INIT_DELAYED_WORK(&mv->work, memvote_work);
