@@ -199,6 +199,8 @@ with its old direct write (PSNR 44.2 dB).
 
 ### The GPU's report to the PMP, patches 0035-0037
 
+Rationale, evidence, design, tests and provenance: [docs/pmp-gpu-report.md](../../docs/pmp-gpu-report.md).
+
 The GPU's own shortfall with the PMP running (3-20% on memory-bound work)
 is not a CPU-request problem: the PMP runs its own bandwidth-driven fabric
 and DRAM controller DVFS for the GPU, but only for a GPU that has been
