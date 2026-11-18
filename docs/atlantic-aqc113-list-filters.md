@@ -5,7 +5,8 @@
 | patch | `packages/kernel/patches/0003-net-atlantic-AQC113-Enable-list-filters-relative-to-.patch` |
 | subject | net: atlantic: AQC113: Enable list filters relative to the base index |
 | package | `kernel` |
-| pull requests | none of its own: added with the 7.2.11 kernel (commit `4a98204`) and rewritten for 7.2.15 (commit `f902567`), before the PR history; carried to 7.3.1 in #9; its compile check was fixed in #13 |
+| status | **retired** in 7.3.4 `plus5` (#21): the 7.3.4 tree fixes the problem itself; carried up to 7.3.1 `plus4` and on the 7.2.11 line (`kernel-7.2`) |
+| pull requests | none of its own: added with the 7.2.11 kernel (commit `4a98204`) and rewritten for 7.2.15 (commit `f902567`), before the PR history; carried to 7.3.1 in #9; its compile check was fixed in #13; dropped in #21 |
 
 ## What it does
 
@@ -60,8 +61,9 @@ in all-multicast mode.
 
 ## Limitations and open items
 
-- No specific multicast test on 7.3.1 yet (the case the patch fixes);
-  unicast and bridging work.
+- No specific multicast test was run on 7.3.1 (the case the patch fixes);
+  unicast and bridging worked. From 7.3.4 the upstream code replaces it, so
+  the multicast case is now upstream's.
 
 ## Hardware
 
@@ -71,6 +73,11 @@ controllers (base index 1): no change.
 
 ## Upstream status and provenance
 
-Not submitted upstream; it applies on top of the Asahi tree's own AQC113
-fix. This project's work (LICENSING.md, CREDITS.md), written
+Fixed upstream from 7.3.4: that tree has its own
+`hw_atl2_hw_packet_filter_set()`, which enables the list entries relative
+to `l2_filters_base_index`, and `hw_atl_b0.c` no longer has the shared
+helper this patch changed, so 7.3.4 `plus5` drops it
+([kernel-7.3.4-rebase.md](kernel-7.3.4-rebase.md#patches)). This patch
+itself was never submitted upstream; it applied on top of the Asahi tree's
+own earlier AQC113 fix. This project's work (LICENSING.md, CREDITS.md), written
 from the Linux driver source and observed on hardware.

@@ -6,7 +6,8 @@
 | config | `INTERCONNECT_APPLE_PMP=y`, `APPLE_CPU_MEMVOTE=m` (`packages/kernel/configs/plus-aarch64.config`) |
 | also | `apple-ave` 0.99.6-3: the encoder's PMP vote goes through the provider (`pmp_icc=1`), see [apple-ave.md](apple-ave.md) |
 | pull requests | #18 (the series and its review rounds), #19 (kernel `BUILDID` `plus4`) |
-| follow-up | 0035-0037, reporting the GPU to the PMP: PR #20, with its own document |
+| follow-up | 0035-0037, reporting the GPU to the PMP (#20): [pmp-gpu-report.md](pmp-gpu-report.md) |
+| 7.3.4 | rebased unchanged in #21; retested there ([kernel-7.3.4-rebase.md](kernel-7.3.4-rebase.md#tests-m1-max-laptop-t6001-pmp-running)) |
 
 ## What it does
 
@@ -143,6 +144,11 @@ on the 7.3.1 `plus3` base (PR #18 comments):
 - No new warnings, faults or PMP crashes in the kernel log.
 - CPU hotplug could not be exercised (the platform refuses to offline
   CPUs); that path is compile-tested only.
+- On 7.3.4 `plus5` (#21, same M1 Max, one-shot boot): 10-thread STREAM
+  151/155 and 152/164 GB/s in `auto`, 55/67 in `off`, one P-cluster thread
+  76/82; apple-ave 2.51 s with the vote through the provider, 3.91 s
+  without; matching 7.3.1 `plus4`
+  ([kernel-7.3.4-rebase.md](kernel-7.3.4-rebase.md)).
 
 ## Limitations and open items
 
@@ -150,8 +156,8 @@ on the 7.3.1 `plus3` base (PR #18 comments):
   PMP running is not a CPU-request problem. t600x device trees have no PMP
   report entry for the GPU (t8112's have one). Making such an entry the
   GPU's power domain, as t8112 does, hung an M1 Max within seconds of the
-  GPU firmware starting (3 of 3); reporting it once the GPU driver has
-  bound is the approach of PR #20 (0035-0037).
+  GPU firmware starting (3 of 3); 0035-0037 (#20) report it once the GPU
+  driver has bound instead ([pmp-gpu-report.md](pmp-gpu-report.md)).
 - t6002 (two dies' worth of clusters and agents), t8112 and t8103 get no
   provider.
 - Only the first video encoder (AVE0) has a node; other agents (decoder,

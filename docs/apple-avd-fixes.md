@@ -70,6 +70,10 @@
     the same codecs as before;
   - DKMS built the module for the installed 7.3.1 kernels, and an M1 Max
     Mac Studio loaded it from DKMS's `extra/` directory.
+- 7.3.4 (#21): `scripts/rebase-avd.sh` against the 7.3.4 SRPM applies all
+  patches and gives a result identical to `packages/apple-avd/src`, so the
+  package is unchanged; `BUILD_EXCLUSIVE_KERNEL` covers 7.3.4, and the
+  module compiles cleanly against a 7.3.4 build tree.
 
 ## Limitations and open items
 

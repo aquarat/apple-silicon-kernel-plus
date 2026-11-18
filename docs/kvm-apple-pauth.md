@@ -5,7 +5,7 @@
 | patch | `packages/kernel/patches/0001-KVM-arm64-Handle-Apple-PAuth-virtualization-state-under-VHE.patch` |
 | subject | KVM: arm64: Handle Apple PAuth virtualization state under VHE |
 | package | `kernel` (always on) |
-| pull requests | #6 (7.3.1 rebase), #7 (7.2.11 line), #9 (7.3.1 on `main`); the `plus4` rewrite on 7.2.11 predates the PR history (commit `5c4d277`) |
+| pull requests | #6 (7.3.1 rebase), #7 (7.2.11 line), #9 (7.3.1 on `main`); the `plus4` rewrite on 7.2.11 predates the PR history (commit `5c4d277`); rebased to 7.3.4 in #21 |
 | more | [kvm-macos-guests.md](kvm-macos-guests.md) (how to use it, checks), [kvm-pauth-provenance.md](kvm-pauth-provenance.md) (how it was written, full test record) |
 
 ## What it does

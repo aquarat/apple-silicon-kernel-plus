@@ -5,7 +5,7 @@
 | patch | `packages/kernel/patches/0002-KVM-arm64-emulate-MMIO-ldst-without-ISV.patch` |
 | subject | KVM: arm64: emulate MMIO load/store-immediate aborts without a syndrome |
 | package | `kernel`; on by default, `kvm.emulate_nisv_ldst=0` turns it off |
-| pull requests | none of its own: it came with the first kernel package (commit `1e1f452`, off by default) and was turned on by default in the 7.2.11 kernel (commit `4a98204`), both before the PR history; rebased in #9 |
+| pull requests | none of its own: it came with the first kernel package (commit `1e1f452`, off by default) and was turned on by default in the 7.2.11 kernel (commit `4a98204`), both before the PR history; rebased in #9 and to 7.3.4 in #21 |
 | more | [kvm-macos-guests.md](kvm-macos-guests.md#0002-mmio-loadsstores-without-a-syndrome-on-by-default) (switching it, checks) |
 
 ## What it does

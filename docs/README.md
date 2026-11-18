@@ -22,11 +22,15 @@ here, and links between documents stay short.
 
 ### Kernel (`packages/kernel/patches/`)
 
+The current patch set is that of 7.3.4 `plus5`; what the rebase from 7.3.1
+changed (pins, release ordering, the dropped 0003, configs, tests) is in
+[kernel-7.3.4-rebase.md](kernel-7.3.4-rebase.md).
+
 | patch file | topic | document |
 |---|---|---|
 | `0001-KVM-arm64-Handle-Apple-PAuth-virtualization-state-under-VHE.patch` | KVM: Apple PAuth state for macOS guests | [kvm-apple-pauth.md](kvm-apple-pauth.md) (also [kvm-macos-guests.md](kvm-macos-guests.md), [kvm-pauth-provenance.md](kvm-pauth-provenance.md)) |
 | `0002-KVM-arm64-emulate-MMIO-ldst-without-ISV.patch` | KVM: MMIO loads/stores without a syndrome | [kvm-mmio-without-isv.md](kvm-mmio-without-isv.md) |
-| `0003-net-atlantic-AQC113-Enable-list-filters-relative-to-.patch` | atlantic: AQC113 list filters | [atlantic-aqc113-list-filters.md](atlantic-aqc113-list-filters.md) |
+| `0003-net-atlantic-AQC113-Enable-list-filters-relative-to-.patch` (**retired** in 7.3.4 `plus5`, #21: the 7.3.4 tree fixes it upstream) | atlantic: AQC113 list filters | [atlantic-aqc113-list-filters.md](atlantic-aqc113-list-filters.md) |
 | `0004-drm-asahi-Drain-deferred-GPUVM-BOs-when-a-kernel-map.patch` (branch `kernel-7.2` only) | drm/asahi: kernel-VM BO leak | [asahi-gpu-kernel-vm-bo-drain.md](asahi-gpu-kernel-vm-bo-drain.md) |
 | `0010-dt-bindings-pci-Add-Apple-T600x-tunnelled-PCIe-contr.patch` | tunnelled PCIe (APCIEC): binding | [thunderbolt-pcie-apciec.md](thunderbolt-pcie-apciec.md) |
 | `0011-PCI-apple-Add-driver-for-the-T600x-tunnelled-PCIe-co.patch` | APCIEC: driver | [thunderbolt-pcie-apciec.md](thunderbolt-pcie-apciec.md) |
@@ -45,7 +49,9 @@ here, and links between documents stay short.
 | `0032-interconnect-Export-icc_get.patch` | interconnect: export `icc_get()` | [pmp-fabric-dram-requests.md](pmp-fabric-dram-requests.md) |
 | `0033-interconnect-apple-Add-a-PMP-provider-for-fabric-and.patch` | PMP: interconnect provider | [pmp-fabric-dram-requests.md](pmp-fabric-dram-requests.md) |
 | `0034-soc-apple-Add-CPU-cluster-memory-bandwidth-votes.patch` | PMP: CPU cluster bandwidth votes | [pmp-fabric-dram-requests.md](pmp-fabric-dram-requests.md) |
-| 0035-0037 (open PR #20) | PMP: report the GPU | `pmp-gpu-report.md`, added by that PR |
+| `0035-dt-bindings-power-apple-Add-the-PMP-power-state-repo.patch` | PMP: report-node binding | [pmp-gpu-report.md](pmp-gpu-report.md) |
+| `0036-pmdomain-apple-pmp-report-Report-a-block-only-while-.patch` | PMP: report a block while its driver is bound | [pmp-gpu-report.md](pmp-gpu-report.md) |
+| `0037-arm64-dts-apple-t600x-Report-the-GPU-to-the-PMP-whil.patch` | PMP: report the GPU (t6000/t6001) | [pmp-gpu-report.md](pmp-gpu-report.md) |
 
 Kernel configuration choices (`packages/kernel/configs/plus-aarch64.config`)
 are explained in [packages/kernel/README.md](../packages/kernel/README.md#configs)
@@ -74,6 +80,7 @@ packaging, explained in the package READMEs and in LICENSING.md.
 |---|---|
 | [kvm-macos-guests.md](kvm-macos-guests.md) | using the KVM patches for macOS guests: switches and checks |
 | [kvm-pauth-provenance.md](kvm-pauth-provenance.md) | how kernel patch 0001 was written (clean-room process, sources, incidents, tests) |
+| [kernel-7.3.4-rebase.md](kernel-7.3.4-rebase.md) | the move from 7.3.1 `plus4` to 7.3.4 `plus5`: pins, release ordering, patch and config changes, tests |
 | [consolidation-plan.md](consolidation-plan.md) | inventory of kernel-side work and what is carried, decided 2026-11-17 |
 | [maintainer-guide.md](maintainer-guide.md) | building, rebasing and bumping the packages |
 | [release-process.md](release-process.md) | versions and releases |

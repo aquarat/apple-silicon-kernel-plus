@@ -4,7 +4,7 @@
 |---|---|
 | patches | `packages/kernel/patches/0026-net-thunderbolt-Make-oversized-TSO-packets-forwardab.patch`, `0027-net-thunderbolt-Segment-TSO-packets-the-receiver-wou.patch` |
 | package | `kernel` |
-| pull requests | 0026: none of its own (commit `8e0c55e`, 7.2.11 `plus3`, before the PR history). 0027: #2 (7.2.11 `plus5`, now on branch `kernel-7.2` through #7) and #3 (7.3.1 `plus2`); on `main` through #9 |
+| pull requests | 0026: none of its own (commit `8e0c55e`, 7.2.11 `plus3`, before the PR history). 0027: #2 (7.2.11 `plus5`, now on branch `kernel-7.2` through #7) and #3 (7.3.1 `plus2`); on `main` through #9; rebased to 7.3.4 in #21 |
 | upstream source | [aquarat/apple-silicon-thunderbolt-linux](https://github.com/aquarat/apple-silicon-thunderbolt-linux) `patches/tb-net/` 0007 and 0008 |
 | related | [thunderbolt-net.md](thunderbolt-net.md) (0020-0025) |
 

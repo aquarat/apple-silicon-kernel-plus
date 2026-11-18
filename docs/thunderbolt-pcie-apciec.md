@@ -5,7 +5,7 @@
 | patches | `packages/kernel/patches/0010-dt-bindings-pci-Add-Apple-T600x-tunnelled-PCIe-contr.patch`, `0011-PCI-apple-Add-driver-for-the-T600x-tunnelled-PCIe-co.patch`, `0012-arm64-dts-apple-t600x-Add-tunnelled-PCIe-controllers.patch`, `0013-arm64-dts-apple-t600x-Enable-tunnelled-PCIe-on-j314-.patch` |
 | package files | `packages/apple-silicon-thunderbolt/60-apciec-nvme-apst.rules` (package `apple-silicon-thunderbolt`) |
 | config | `CONFIG_PCIE_APPLE_APCIEC=m` (`packages/kernel/configs/plus-aarch64.config`) |
-| pull requests | none of their own: added in commits `aaa12fa` and `5f95446` (7.2.11, before the PR history); carried to 7.3.1 in #9 |
+| pull requests | none of their own: added in commits `aaa12fa` and `5f95446` (7.2.11, before the PR history); carried to 7.3.1 in #9 and rebased to 7.3.4 in #21 |
 | upstream source | [aquarat/apple-silicon-thunderbolt-linux](https://github.com/aquarat/apple-silicon-thunderbolt-linux) `patches/` (commit `dfbc506`); its README has the full test record |
 
 ## What it does

@@ -4,7 +4,7 @@
 |---|---|
 | patches | `packages/kernel/patches/0020-thunderbolt-apple-Enable-E2E-flow-control-on-Tx-ring.patch`, `0021-net-thunderbolt-Enable-E2E-flow-control-on-the-Tx-ri.patch`, `0022-arm64-dts-apple-t600x-Mark-the-USB4-NHIs-as-DMA-cohe.patch`, `0023-net-thunderbolt-Fix-a-lost-Tx-queue-wakeup.patch`, `0024-net-thunderbolt-Use-a-page-pool-for-Rx-buffers.patch`, `0025-thunderbolt-apple-Derive-a-per-machine-host-router-U.patch` |
 | package files | `packages/apple-silicon-thunderbolt/61-thunderbolt-net-threaded.rules` (package `apple-silicon-thunderbolt`) |
-| pull requests | none of their own: added in commit `cc9112b` (7.2.11 `plus2`, before the PR history); carried to 7.3.1 in #9 |
+| pull requests | none of their own: added in commit `cc9112b` (7.2.11 `plus2`, before the PR history); carried to 7.3.1 in #9 and rebased to 7.3.4 in #21 |
 | upstream source | [aquarat/apple-silicon-thunderbolt-linux](https://github.com/aquarat/apple-silicon-thunderbolt-linux) `patches/tb-net/` 0001-0006; its README has the full test record |
 | related | [thunderbolt-net-tso-forwarding.md](thunderbolt-net-tso-forwarding.md) (0026, 0027: forwarding a peer's TSO packets) |
 
