@@ -228,6 +228,13 @@ COPR builds the same SRPMs through `.copr/Makefile`. Maintainer guide:
 [docs/maintainer-guide.md](docs/maintainer-guide.md); releases:
 [docs/release-process.md](docs/release-process.md).
 
+## Documentation
+
+Every patch and patched package has a document in [docs/](docs/README.md):
+what it does, why, how it was tested and its provenance. The index maps
+each patch file to its document. New patches come with one
+([CONTRIBUTING.md](CONTRIBUTING.md)).
+
 ## Credits
 
 - Anees Iqbal ([steelbrain](https://github.com/steelbrain)): the original
