@@ -54,9 +54,14 @@ jobs:
     runs-on: ubuntu-24.04
     container: registry.fedoraproject.org/fedora:44
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install copr-cli
-        run: dnf -y install --setopt=install_weak_deps=False copr-cli rpm-build python3
+        run: dnf -y install --setopt=install_weak_deps=False copr-cli rpm-build python3 git-core
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # copr-sync.py dates the packages' last changes from the history
+          fetch-depth: 0
+      - name: Trust the checkout (the container runs as another user)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Write the copr-cli config
         env:
           COPR_CONFIG: ${{ secrets.COPR_CONFIG }}

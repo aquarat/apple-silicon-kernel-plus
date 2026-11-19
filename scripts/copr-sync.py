@@ -12,7 +12,10 @@ on this checkout names with the COPR project's builds of that package:
   building  the newest build is of this version-release and still running
   failed    the newest build is of this version-release and failed: not
             retried (a daily retry would only fail again) unless
-            --retry-failed is given
+            --retry-failed is given. A build whose SRPM step failed has no
+            version; it counts as an attempt at the current spec when it
+            was submitted after the last commit that changed the package's
+            sources (git history; without it, it counts as one)
   missing   COPR has no build of this version-release yet (never built,
             or the spec moved on after a merge)
 
@@ -64,8 +67,18 @@ def spec_evr(name):
     return r.stdout.strip()
 
 
+def changed_at(name):
+    """Commit time of the last change to what the package's SRPM is made
+    from, or None without git history."""
+    r = subprocess.run(["git", "-C", TOP, "log", "-1", "--format=%ct", "--",
+                        f"packages/{name}", "scripts/make-srpm.sh", ".copr"],
+                       capture_output=True, text=True)
+    return int(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
+
+
 def copr_builds(project, name):
-    """The package's builds, newest first, as (id, state, version-release)."""
+    """The package's builds, newest first, as (id, state, version-release,
+    submitted_on)."""
     owner, proj = project.split("/", 1)
     q = urllib.parse.urlencode({"ownername": owner, "projectname": proj,
                                 "packagename": name, "limit": 100})
@@ -73,18 +86,27 @@ def copr_builds(project, name):
                                  headers={"User-Agent": "apple-silicon-kernel-plus"})
     with urllib.request.urlopen(req, timeout=60) as r:
         items = json.load(r)["items"]
-    out = [(b["id"], b["state"], (b.get("source_package") or {}).get("version") or "")
-           for b in items]
+    out = [(b["id"], b["state"], (b.get("source_package") or {}).get("version") or "",
+            b.get("submitted_on") or 0) for b in items]
     return sorted(out, reverse=True)
 
 
 def status(project, name, want):
     """(state, build id) of the newest build of exactly `want`."""
     builds = copr_builds(project, name)
-    # A build whose SRPM step has not run yet has no version: count it as
-    # building this one, so a second run does not start another.
-    for bid, state, evr in builds:
-        if evr == want or (not evr and state in RUNNING):
+    since = changed_at(name)
+    for bid, state, evr, submitted in builds:
+        if not evr:
+            # No version: the SRPM step has not run yet (count it as
+            # building this one, so a second run does not start another)
+            # or it failed (an attempt at the current sources if it was
+            # submitted after their last change).
+            if state in RUNNING:
+                return "building", bid
+            if since is None or submitted >= since:
+                return "failed", bid
+            continue
+        if evr == want:
             if state == "succeeded":
                 return "ok", bid
             if state in RUNNING:
