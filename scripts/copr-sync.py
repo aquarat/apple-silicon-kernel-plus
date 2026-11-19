@@ -14,8 +14,9 @@ on this checkout names with the COPR project's builds of that package:
             retried (a daily retry would only fail again) unless
             --retry-failed is given. A build whose SRPM step failed has no
             version; it counts as an attempt at the current spec when it
-            was submitted after the last commit that changed the package's
-            sources (git history; without it, it counts as one)
+            was submitted after the package's sources last changed on this
+            branch (the merge time, from git history; without history it
+            counts as one)
   missing   COPR has no build of this version-release yet (never built,
             or the spec moved on after a merge)
 
@@ -68,9 +69,12 @@ def spec_evr(name):
 
 
 def changed_at(name):
-    """Commit time of the last change to what the package's SRPM is made
-    from, or None without git history."""
-    r = subprocess.run(["git", "-C", TOP, "log", "-1", "--format=%ct", "--",
+    """When the last change to what the package's SRPM is made from landed
+    on this branch, or None without git history. --first-parent makes that
+    the merge (or the pushed commit) rather than the commit on the pull
+    request's branch, which can be older than a build of the previous
+    sources. COPR does not record which revision a build used."""
+    r = subprocess.run(["git", "-C", TOP, "log", "--first-parent", "-1", "--format=%ct", "--",
                         f"packages/{name}", "scripts/make-srpm.sh", ".copr"],
                        capture_output=True, text=True)
     return int(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
