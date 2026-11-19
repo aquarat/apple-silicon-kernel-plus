@@ -16,6 +16,7 @@ scripts/kernel-watch.py  kernel status: does COPR need a build, what moved upstr
 scripts/kernel-build-check.sh  compiles what the kernel patches touch, and the DKMS modules
 scripts/rebase-avd.sh    rebuilds packages/apple-avd/src for a kernel
 scripts/copr-setup.sh    creates the COPR project and package definitions
+scripts/bench-charts.py  draws docs/img/*.svg from docs/data/benchmarks.json (--check in CI)
 .copr/Makefile           COPR's make_srpm entry point
 container/               the tools image (install-tools.sh is shared with CI)
 .github/workflows/       ci, kernel-build, kernel-watch, copr-build

@@ -29,9 +29,11 @@ jobs:
       - name: Python scripts compile
         run: |
           python3 -m py_compile scripts/asahi-kernel.py scripts/kernel-watch.py scripts/kernel-configs.py \
-            packages/apple-ave/firmware/ave_fwgen.py
+            packages/apple-ave/firmware/ave_fwgen.py scripts/bench-charts.py
           python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' \
             packages/apple-ave/firmware/apple-ave-fetch-firmware
+      - name: Benchmark charts match their data (docs/benchmarks.md)
+        run: python3 scripts/bench-charts.py --check
       - name: kernel-build-check tests (synthetic tree)
         run: tests/kernel-build-check/test-owning-dirs.sh
       - name: apple-ave tests (synthetic files, no network)

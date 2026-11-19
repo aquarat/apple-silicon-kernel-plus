@@ -80,7 +80,9 @@ packaging, explained in the package READMEs and in LICENSING.md.
 |---|---|
 | [kvm-macos-guests.md](kvm-macos-guests.md) | using the KVM patches for macOS guests: switches and checks |
 | [kvm-pauth-provenance.md](kvm-pauth-provenance.md) | how kernel patch 0001 was written (clean-room process, sources, incidents, tests) |
-| [kernel-7.3.4-rebase.md](kernel-7.3.4-rebase.md) | the move from 7.3.1 `plus4` to 7.3.4 `plus5`: pins, release ordering, patch and config changes, tests |
+| [kernel-7.3.4-rebase.md](kernel-7.3.4-rebase.md) | the move from 7.3.1 `plus4` to 7.3.4 `plus5`: pins, release ordering, patch and config changes, tests (M1 Max and M1 Pro) |
+| [benchmarks.md](benchmarks.md) | measured results of the patches and packages, as charts and tables, each citing the document it comes from; charts drawn by `scripts/bench-charts.py` from [data/benchmarks.json](data/benchmarks.json) into `img/` |
+| [kernel-release-naming.md](kernel-release-naming.md) | the kernel's version-release scheme, its history and how it sorts against `@asahi`'s kernels |
 | [consolidation-plan.md](consolidation-plan.md) | inventory of kernel-side work and what is carried, decided 2026-11-17 |
 | [maintainer-guide.md](maintainer-guide.md) | building, rebasing and bumping the packages |
 | [release-process.md](release-process.md) | versions and releases |

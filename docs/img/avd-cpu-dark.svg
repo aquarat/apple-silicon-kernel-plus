@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="231" viewBox="0 0 760 231" role="img" aria-labelledby="avd-cpu-title avd-cpu-desc" font-family="system-ui, -apple-system, &quot;Segoe UI&quot;, Helvetica, Arial, sans-serif">
+<title id="avd-cpu-title">AVD decoder: CPU time with cacheable buffers (0001)</title>
+<desc id="avd-cpu-desc">M1 Mac mini (t8103), ffmpeg v4l2request, 150 frames 2304x1296 scaled to 640x360; user + sys CPU seconds. hardware decode, before 0001, CPU time: 3.06 s; hardware decode, with 0001, CPU time: 0.47-0.54 s; software decode, one thread, CPU time: 0.53 s</desc>
+<rect x="0.5" y="0.5" width="759" height="230" rx="8" fill="#1a1a19" stroke="#2c2c2a"/>
+<text x="20" y="38" font-size="16" font-weight="600" fill="#f0efec">AVD decoder: CPU time with cacheable buffers (0001)</text>
+<text x="20" y="60" font-size="12.5" fill="#c3c2b7">M1 Mac mini (t8103), ffmpeg v4l2request, 150 frames 2304x1296 scaled to 640x360; user + sys CPU</text>
+<text x="20" y="77" font-size="12.5" fill="#c3c2b7">seconds</text>
+<line x1="230.0" y1="97" x2="230.0" y2="175" stroke="#383835" stroke-width="1"/>
+<text x="230.0" y="189" font-size="11" text-anchor="middle" fill="#9b9a94">0</text>
+<line x1="344.0" y1="97" x2="344.0" y2="175" stroke="#2c2c2a" stroke-width="1"/>
+<text x="344.0" y="189" font-size="11" text-anchor="middle" fill="#9b9a94">1</text>
+<line x1="458.0" y1="97" x2="458.0" y2="175" stroke="#2c2c2a" stroke-width="1"/>
+<text x="458.0" y="189" font-size="11" text-anchor="middle" fill="#9b9a94">2</text>
+<line x1="572.0" y1="97" x2="572.0" y2="175" stroke="#2c2c2a" stroke-width="1"/>
+<text x="572.0" y="189" font-size="11" text-anchor="middle" fill="#9b9a94">3</text>
+<line x1="686.0" y1="97" x2="686.0" y2="175" stroke="#2c2c2a" stroke-width="1"/>
+<text x="686.0" y="189" font-size="11" text-anchor="middle" fill="#9b9a94">4</text>
+<text x="686.0" y="203" font-size="11" text-anchor="end" fill="#9b9a94">s</text>
+<text x="220.00000000000003" y="112.5" font-size="12.5" text-anchor="end" fill="#f0efec">hardware decode, before 0001</text>
+<g><title>hardware decode, before 0001, CPU time: 3.06 s</title>
+<path d="M230.0,101.0H574.8A4,4 0 0 1 578.8,105.0V111.0A4,4 0 0 1 574.8,115.0H230.0Z" fill="#3987e5"/>
+<text x="583.8" y="112" font-size="11.5" fill="#c3c2b7">3.06</text></g>
+<text x="220.00000000000003" y="140.5" font-size="12.5" text-anchor="end" fill="#f0efec">hardware decode, with 0001</text>
+<g><title>hardware decode, with 0001, CPU time: 0.47-0.54 s</title>
+<path d="M230.0,129.0H279.6A4,4 0 0 1 283.6,133.0V139.0A4,4 0 0 1 279.6,143.0H230.0Z" fill="#3987e5"/>
+<line x1="283.6" y1="136.0" x2="291.6" y2="136.0" stroke="#3987e5" stroke-width="2"/>
+<line x1="291.6" y1="131" x2="291.6" y2="141" stroke="#3987e5" stroke-width="2" stroke-linecap="round"/>
+<text x="296.6" y="140" font-size="11.5" fill="#c3c2b7">0.47-0.54</text></g>
+<text x="220.00000000000003" y="168.5" font-size="12.5" text-anchor="end" fill="#f0efec">software decode, one thread</text>
+<g><title>software decode, one thread, CPU time: 0.53 s</title>
+<path d="M230.0,157.0H286.4A4,4 0 0 1 290.4,161.0V167.0A4,4 0 0 1 286.4,171.0H230.0Z" fill="#3987e5"/>
+<text x="295.4" y="168" font-size="11.5" fill="#c3c2b7">0.53</text></g>
+<text x="20" y="215" font-size="11" fill="#9b9a94">Source: docs/apple-avd-fixes.md</text>
+</svg>

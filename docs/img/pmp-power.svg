@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="275" viewBox="0 0 760 275" role="img" aria-labelledby="pmp-power-title pmp-power-desc" font-family="system-ui, -apple-system, &quot;Segoe UI&quot;, Helvetica, Arial, sans-serif">
+<title id="pmp-power-title">System power, PMP not running against running</title>
+<desc id="pmp-power-desc">M1 Max (t6001) laptop on AC, Asahi 7.1.13 kernel, fixed backlight, SMC total system power; four boots off/on/off/on. idle (6 min mean, per boot), PMP not running: 7.94-8.48 W; idle (6 min mean, per boot), PMP running: 6.85-7.08 W; sha256, 1 thread, PMP not running: 10.53 W; sha256, 1 thread, PMP running: 9.16 W</desc>
+<rect x="0.5" y="0.5" width="759" height="274" rx="8" fill="#fcfcfb" stroke="#e1e0d9"/>
+<text x="20" y="38" font-size="16" font-weight="600" fill="#0b0b0b">System power, PMP not running against running</text>
+<text x="20" y="60" font-size="12.5" fill="#52514e">M1 Max (t6001) laptop on AC, Asahi 7.1.13 kernel, fixed backlight, SMC total system power; four boots</text>
+<text x="20" y="77" font-size="12.5" fill="#52514e">off/on/off/on</text>
+<rect x="20" y="93" width="12" height="12" rx="3" fill="#1baf7a"/>
+<text x="38" y="103" font-size="12" fill="#52514e">PMP not running</text>
+<rect x="158.8" y="93" width="12" height="12" rx="3" fill="#2a78d6"/>
+<text x="176.8" y="103" font-size="12" fill="#52514e">PMP running</text>
+<line x1="223.0" y1="137" x2="223.0" y2="219" stroke="#c3c2b7" stroke-width="1"/>
+<text x="223.0" y="233" font-size="11" text-anchor="middle" fill="#6f6e69">0</text>
+<line x1="315.6" y1="137" x2="315.6" y2="219" stroke="#e1e0d9" stroke-width="1"/>
+<text x="315.6" y="233" font-size="11" text-anchor="middle" fill="#6f6e69">2.5</text>
+<line x1="408.2" y1="137" x2="408.2" y2="219" stroke="#e1e0d9" stroke-width="1"/>
+<text x="408.2" y="233" font-size="11" text-anchor="middle" fill="#6f6e69">5</text>
+<line x1="500.8" y1="137" x2="500.8" y2="219" stroke="#e1e0d9" stroke-width="1"/>
+<text x="500.8" y="233" font-size="11" text-anchor="middle" fill="#6f6e69">7.5</text>
+<line x1="593.4" y1="137" x2="593.4" y2="219" stroke="#e1e0d9" stroke-width="1"/>
+<text x="593.4" y="233" font-size="11" text-anchor="middle" fill="#6f6e69">10</text>
+<line x1="686.0" y1="137" x2="686.0" y2="219" stroke="#e1e0d9" stroke-width="1"/>
+<text x="686.0" y="233" font-size="11" text-anchor="middle" fill="#6f6e69">12.5</text>
+<text x="686.0" y="247" font-size="11" text-anchor="end" fill="#6f6e69">W</text>
+<text x="213.00000000000003" y="160.5" font-size="12.5" text-anchor="end" fill="#0b0b0b">idle (6 min mean, per boot)</text>
+<g><title>idle (6 min mean, per boot), PMP not running: 7.94-8.48 W</title>
+<path d="M223.0,141.0H513.1A4,4 0 0 1 517.1,145.0V151.0A4,4 0 0 1 513.1,155.0H223.0Z" fill="#1baf7a"/>
+<line x1="517.1" y1="148.0" x2="537.1" y2="148.0" stroke="#1baf7a" stroke-width="2"/>
+<line x1="537.1" y1="143" x2="537.1" y2="153" stroke="#1baf7a" stroke-width="2" stroke-linecap="round"/>
+<text x="542.1" y="152" font-size="11.5" fill="#52514e">7.94-8.48</text></g>
+<g><title>idle (6 min mean, per boot), PMP running: 6.85-7.08 W</title>
+<path d="M223.0,157.0H472.7A4,4 0 0 1 476.7,161.0V167.0A4,4 0 0 1 472.7,171.0H223.0Z" fill="#2a78d6"/>
+<line x1="476.7" y1="164.0" x2="485.2" y2="164.0" stroke="#2a78d6" stroke-width="2"/>
+<line x1="485.2" y1="159" x2="485.2" y2="169" stroke="#2a78d6" stroke-width="2" stroke-linecap="round"/>
+<text x="490.2" y="168" font-size="11.5" fill="#52514e">6.85-7.08</text></g>
+<text x="213.00000000000003" y="204.5" font-size="12.5" text-anchor="end" fill="#0b0b0b">sha256, 1 thread</text>
+<g><title>sha256, 1 thread, PMP not running: 10.53 W</title>
+<path d="M223.0,185.0H609.0A4,4 0 0 1 613.0,189.0V195.0A4,4 0 0 1 609.0,199.0H223.0Z" fill="#1baf7a"/>
+<text x="618.0" y="196" font-size="11.5" fill="#52514e">10.53</text></g>
+<g><title>sha256, 1 thread, PMP running: 9.16 W</title>
+<path d="M223.0,201.0H558.3A4,4 0 0 1 562.3,205.0V211.0A4,4 0 0 1 558.3,215.0H223.0Z" fill="#2a78d6"/>
+<text x="567.3" y="212" font-size="11.5" fill="#52514e">9.16</text></g>
+<text x="20" y="259" font-size="11" fill="#6f6e69">Source: docs/pmp-fabric-dram-requests.md</text>
+</svg>

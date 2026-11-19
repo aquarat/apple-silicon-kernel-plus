@@ -138,8 +138,18 @@ in GB/s:
 
 ## Limitations and open points
 
-- **Not booted from a rebuilt stage 2:** the tests added the entry to the running device tree.
-  The DTBs in this package only take effect once m1n1's stage 2 is rebuilt from them.
+- **Booted from a rebuilt stage 2 after the merge** (2026-11-18): the tests above added the entry
+  to the running device tree. The DTBs in this package only take effect once m1n1's stage 2 is
+  rebuilt from them. That was done afterwards on two laptops, each as a one-shot trial of the new
+  stage 2 that put the previous one back unless the boot was accepted: only the machine's own DTB
+  was replaced by 7.3.4 `plus5`'s with the PMP enabled, m1n1 and U-Boot unchanged.
+  - 14" M1 Max (J314c): `report@9` was in the device tree before any module loaded; GPU mat-vec
+    170 / 222 / 263 / 155 GB/s and 10-thread STREAM 159-162 / 159-164, the same as with the
+    entry added at run time. A 7.3.1 `plus3` kernel (without 0036) also booted on that device
+    tree, but treats `report@9` as an unused power domain and switches it off, so it gets no
+    GPU report (GPU 160 / 186 / 187 / 131).
+  - 14" M1 Pro (J314s): the same numbers as with the entry added at run time
+    ([kernel-7.3.4-rebase.md](kernel-7.3.4-rebase.md#tests-m1-pro-laptop-t6000-pmp-running)).
 - **Suspend/resume untested:** `pm_test=devices` hangs the test machine without these patches too.
 - **Entry unbind not exercised on hardware:** unbinding an entry through sysfs was only
   compile-tested.

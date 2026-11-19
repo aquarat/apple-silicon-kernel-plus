@@ -61,6 +61,30 @@ request has to follow memory demand, not CPU load: L1D load misses per 1000
 cycles are 56-205 for STREAM and about 1 for sha256, an order of magnitude
 either side of the threshold of 10.
 
+### The measurement behind those figures
+
+The PMP-off/PMP-on comparison the figures above come from, before this
+series existed: a 14" M1 Max MacBook Pro, Asahi's 7.1.13 kernel, m1n1's
+stage 2 with a device tree built with `APPLE_USE_PMP`. "PMP not running" is
+the same device tree with `module_blacklist=pmp` on a one-shot boot entry.
+Four fresh boots in the order off/on/off/on; each with 240 s to settle,
+fixed backlight, battery full on AC, then 6 minutes idle sampled at 1 Hz
+and the loads. Power is the SMC's total system power.
+
+| | PMP not running | PMP running | difference |
+|---|---|---|---|
+| idle W, mean (median), first and second boot | 7.94 (7.90), 8.48 (8.11) | 6.85 (6.53), 7.08 (6.63) | -1.2 W (-1.4 W) |
+| sha256, 1 / 10 threads, W (same throughput) | 10.53 / 41.8 | 9.16 / 40.4 | -1.4 W |
+| CPU STREAM 10 threads, copy/triad GB/s | 110 / 133 | 55 / 67 | -50 % |
+| CPU STREAM 1 thread, copy/triad GB/s | 52 / 71 | 25 / 29 | -52 to -59 % |
+| GPU mat-vec f32/f16/bf16/q4_0 GB/s | 168 / 216 / 240 / 147 | 163 / 192 / 193 / 137 | -3 / -12 / -20 / -7 % |
+| NVMe, 4 MiB reads | 5.1 GB/s | 5.0 GB/s | none |
+
+So the PMP saves about 1.3 W whether the machine is idle or busy, without
+changing CPU throughput, but halves CPU memory bandwidth and costs the GPU
+3-20 % on memory-bound work. This series fixes the CPU side; 0035-0037
+fix the GPU side ([pmp-gpu-report.md](pmp-gpu-report.md)).
+
 ## Design and alternatives
 
 - **Layers.** The dashboard transport lives in the report driver, which
