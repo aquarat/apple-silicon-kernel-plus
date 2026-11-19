@@ -28,7 +28,7 @@ jobs:
             packages/mesa-honeykrisp-plus/honeykrisp-plus packages/mesa-coopmat/with-coopmat
       - name: Python scripts compile
         run: |
-          python3 -m py_compile scripts/asahi-kernel.py scripts/kernel-watch.py scripts/kernel-configs.py \
+          python3 -m py_compile scripts/asahi-kernel.py scripts/kernel-watch.py scripts/kernel-configs.py scripts/copr-sync.py \
             packages/apple-ave/firmware/ave_fwgen.py
           python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' \
             packages/apple-ave/firmware/apple-ave-fetch-firmware

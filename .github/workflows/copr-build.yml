@@ -1,16 +1,36 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Start COPR builds by hand: Actions > copr-build > Run workflow.
-# Uses the COPR_CONFIG secret (the contents of a copr-cli config file).
+# COPR builds of the packages other than the kernel (kernel-watch starts the
+# kernel's, after its prep check).
+# - After a merge to main that changes a package, daily, and by hand with
+#   "missing" (the default): scripts/copr-sync.py starts a build of every
+#   package whose spec names a version-release COPR has not built. A build
+#   that failed for that version is reported, not retried.
+# - By hand with a package name (or "all"): build it now, whatever COPR has.
+# Uses the COPR_CONFIG secret (the contents of a copr-cli config file); never
+# runs for pull requests.
 name: copr-build
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/**'
+      - '!packages/kernel/**'
+      - 'scripts/make-srpm.sh'
+      - 'scripts/copr-sync.py'
+      - '.copr/**'
+      - '.github/workflows/copr-build.yml'
+  schedule:
+    - cron: "47 5 * * *"
   workflow_dispatch:
     inputs:
       package:
-        description: "Package to build"
+        description: "Package to build (missing: every package COPR has not built at its spec's version)"
         type: choice
         required: true
+        default: missing
         options:
+          - missing
           - kernel
           - apple-avd
           - apple-ave
@@ -24,14 +44,19 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: copr-build
+  cancel-in-progress: false
+
 jobs:
   build:
     if: github.repository == 'aquarat/apple-silicon-kernel-plus'
     runs-on: ubuntu-24.04
     container: registry.fedoraproject.org/fedora:44
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install copr-cli
-        run: dnf -y install --setopt=install_weak_deps=False copr-cli
+        run: dnf -y install --setopt=install_weak_deps=False copr-cli rpm-build python3
       - name: Write the copr-cli config
         env:
           COPR_CONFIG: ${{ secrets.COPR_CONFIG }}
@@ -41,19 +66,32 @@ jobs:
           mkdir -p "$HOME/.config"
           printf '%s\n' "$COPR_CONFIG" > "$HOME/.config/copr"
       - name: Start the build(s)
+        id: sync
         env:
-          PACKAGE: ${{ inputs.package }}
+          PACKAGE: ${{ inputs.package || 'missing' }}
         run: |
-          if [ "$PACKAGE" = all ]; then
-            set -- apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus mesa-coopmat qemu-vmapple reims-vgpu-backend kernel
-          else
-            set -- "$PACKAGE"
-          fi
-          for p in "$@"; do
-            case $p in kernel) t=72000 ;; qemu-vmapple|reims-vgpu-backend) t=36000 ;; mesa-honeykrisp-plus|mesa-coopmat) t=18000 ;; *) t=3600 ;; esac
-            echo "== $p"
-            copr-cli build-package aquarat/apple-silicon-kernel-plus --name "$p" --nowait --timeout "$t"
-          done
+          case $PACKAGE in
+          missing)
+            scripts/copr-sync.py --build | tee -a "$GITHUB_OUTPUT"
+            ;;
+          *)
+            if [ "$PACKAGE" = all ]; then
+              set -- apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus mesa-coopmat qemu-vmapple reims-vgpu-backend kernel
+            else
+              set -- "$PACKAGE"
+            fi
+            for p in "$@"; do
+              case $p in kernel) t=72000 ;; qemu-vmapple|reims-vgpu-backend) t=36000 ;; mesa-honeykrisp-plus|mesa-coopmat) t=18000 ;; *) t=3600 ;; esac
+              echo "== $p"
+              copr-cli build-package aquarat/apple-silicon-kernel-plus --name "$p" --nowait --timeout "$t"
+            done
+            ;;
+          esac
+      - name: Report failed builds
+        if: steps.sync.outputs.failed != ''
+        env:
+          FAILED: ${{ steps.sync.outputs.failed }}
+        run: echo "::warning::COPR build of the current spec failed, not retried (re-run by hand with the package name): $FAILED"
       - name: Remove the config
         if: always()
         run: rm -f "$HOME/.config/copr"
