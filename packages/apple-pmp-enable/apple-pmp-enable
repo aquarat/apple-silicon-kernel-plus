@@ -108,20 +108,20 @@ esp_write() {
     cmp -s "$src" "$dst"
 }
 
-# What update-m1n1 would use: sets M1N1 U_BOOT DTB_LIST CONF_LINES
+# What update-m1n1 would use: sets M1N1 U_BOOT DTB_LIST CONF_LINES UPDATE_DISABLED
 read_m1n1_config() {
     local out
     out=$(
-        SOURCE='' M1N1='' U_BOOT='' DTBS='' CONFIG=''
+        SOURCE='' M1N1='' U_BOOT='' DTBS='' CONFIG='' M1N1_UPDATE_DISABLED=''
         # shellcheck disable=SC1090
         . "$SYSCONFIG" || exit 1
         : "${SOURCE:=/usr/lib/asahi-boot/}"
         : "${M1N1:=$SOURCE/m1n1.bin}"
         : "${U_BOOT:=$SOURCE/u-boot-nodtb.bin}"
         : "${CONFIG:=/etc/m1n1.conf}"
-        printf '%s\n' "$M1N1" "$U_BOOT" "$DTBS" "$CONFIG"
+        printf '%s\n' "$M1N1" "$U_BOOT" "$DTBS" "$CONFIG" "$M1N1_UPDATE_DISABLED"
     ) || die "cannot read $SYSCONFIG"
-    { read -r M1N1; read -r U_BOOT; read -r DTBS; read -r CONFIG; } <<<"$out"
+    { read -r M1N1; read -r U_BOOT; read -r DTBS; read -r CONFIG; read -r UPDATE_DISABLED; } <<<"$out"
     [ -n "$DTBS" ] || die "DTBS is not set in $SYSCONFIG"
     [ -f "$M1N1" ] && [ -f "$U_BOOT" ] || die "m1n1 ($M1N1) or U-Boot ($U_BOOT) missing"
     # Same expansion as update-m1n1.
@@ -163,7 +163,13 @@ entry_file() {   # the BLS entry of kernel $1
     mid=$(cat "$MACHINE_ID_FILE")
     f="$ENTRIES/$mid-$1.conf"
     if [ -f "$f" ]; then echo "$f"; return 0; fi
-    grep -l -E "^linux[[:space:]]+(/boot)?/vmlinuz-$1\$" "$ENTRIES"/*.conf 2>/dev/null | grep -v -- '-pmptrial\.conf$' | head -1
+    # Compare as strings: a release such as 7.3.4-...aarch64+16k is not a regex.
+    for f in "$ENTRIES"/*.conf; do
+        case $f in *-pmptrial.conf) continue ;; esac
+        awk -v k="$1" '$1 == "linux" && ($2 == "/vmlinuz-" k || $2 == "/boot/vmlinuz-" k) { f = 1 } END { exit !f }' \
+            "$f" 2>/dev/null && { echo "$f"; return 0; }
+    done
+    return 0
 }
 
 memvote_pmp() {   # 1: the PMP is running (kernel-plus 0034 reports it)
@@ -189,7 +195,8 @@ prepare() {
     fi
     case "$(phase)" in arming|armed|trial) die "a trial is in progress (apple-pmp-enable status)" ;; esac
     d=$(default_kernel) || die "cannot read the default kernel (grubby --default-kernel)"
-    [ "$d" = "$KREL" ] || die "the default kernel is $d, the running one $KREL: boot the default kernel first"
+    [ "$d" = "$KREL" ] || die "the default kernel is $d, the running one $KREL; the trial needs them to be the same.
+  Make the kernel you want the default (grubby --set-default /boot/vmlinuz-<release>), restart into it, then run this again"
     ls "$MODDIR/$KREL"/kernel/drivers/soc/apple/pmp.ko* >/dev/null 2>&1 ||
         die "kernel $KREL has no PMP driver (pmp.ko): use this project's kernel"
     [ -n "$(entry_file "$KREL")" ] || die "no boot entry for $KREL in $ENTRIES"
@@ -218,9 +225,13 @@ prepare() {
     BEFORE=$(esp_dir)/boot.bin
     assemble "$WORK/rebuilt.bin" "${DTB_LIST[@]}" || die "cannot assemble boot.bin from $SYSCONFIG's inputs"
     if ! cmp -s "$WORK/rebuilt.bin" "$BEFORE"; then
-        die "$BEFORE ($(short "$(sum "$BEFORE")")...) is not what update-m1n1 would write now from $SYSCONFIG.
-  The trial must change only the PMP. Run update-m1n1, restart, check that the
+        local hint="Run update-m1n1, restart, check that the
   machine boots normally, then run this again."
+        [ -n "$UPDATE_DISABLED" ] && hint="M1N1_UPDATE_DISABLED is set in $SYSCONFIG, so update-m1n1
+  does nothing: your boot.bin is maintained by hand. Turn the PMP on by hand too,
+  or remove that setting, run update-m1n1, restart and check, then run this again."
+        die "$BEFORE ($(short "$(sum "$BEFORE")")...) is not what update-m1n1 would write now from $SYSCONFIG.
+  The trial must change only the PMP. $hint"
     fi
     say "$BEFORE reproduces from m1n1 + ${#DTB_LIST[@]} device trees + U-Boot"
     "$PMPDTB" patch --validated "$VALIDATED" --board "$BOARD" "$b" "$WORK/$BOARD.dtb" || exit 1
@@ -320,7 +331,9 @@ cmd_status() {
     echo "board               $b"
     echo "running kernel      $KREL"
     if [ -e "$DT/aliases/pmp" ]; then
-        echo "this boot           PMP enabled in the device tree; PMP running: $(memvote_pmp)"
+        local running; running=$(memvote_pmp)
+        [ "$running" = "?" ] && running="unknown (no apple-cpu-memvote stats: needs this project's kernel)"
+        echo "this boot           PMP enabled in the device tree; PMP running: $running"
     else
         echo "this boot           PMP not enabled in the device tree"
     fi
@@ -333,7 +346,7 @@ cmd_status() {
     [ -f "$esp/boot.bin.pre-pmp" ] && echo "ESP boot.bin.pre-pmp $(short "$(sum "$esp/boot.bin.pre-pmp")")... (the boot.bin from before the PMP)"
     if [ -f "$STATE" ]; then
         echo "state               $(phase) (since $(st date))"
-        [ -n "$(st note)" ] && echo "                    $(st note)"
+        if [ -n "$(st note)" ]; then echo "                    $(st note)"; fi
     else
         echo "state               never enabled"
     fi
@@ -353,7 +366,7 @@ cmd_enable() {
     while [ $# -gt 0 ]; do
         case $1 in
         --dry-run) dry=1 ;;
-        --deadman) min=${2:?minutes}; shift ;;
+        --deadman) [ $# -ge 2 ] || die "--deadman takes minutes"; min=$2; shift ;;
         *) die "unknown option $1" ;;
         esac
         shift
@@ -366,9 +379,13 @@ cmd_enable() {
     prepare "$w"
     esp=$(esp_dir); src=$(entry_file "$KREL")
     if [ $dry = 1 ]; then
+        local replaces=""
+        [ -e "$esp/boot.bin.pre-pmp" ] &&
+            replaces="
+     (this replaces the existing boot.bin.pre-pmp, $(short "$(sum "$esp/boot.bin.pre-pmp")")...: keep a copy if you need it)"
         cat <<EOF
 apple-pmp-enable: dry run: nothing was changed. enable would:
-  1. save $esp/boot.bin as $esp/boot.bin.pre-pmp (and in $STATE_DIR), with PMP-RECOVERY.txt beside it
+  1. save $esp/boot.bin as $esp/boot.bin.pre-pmp (and in $STATE_DIR), with PMP-RECOVERY.txt beside it$replaces
   2. add $BLACKLIST to every boot entry (so any boot but the trial starts no PMP)
   3. add the boot entry $(basename "$src" .conf)-pmptrial, without it, with: $TRIAL_ARGS
   4. install the boot-safety drop-ins (emergency/rescue mode and a 15 min boot deadline restart
@@ -592,6 +609,6 @@ abort) cmd_abort ;;
 disable) cmd_disable ;;
 boot) cmd_boot ;;
 deadman) cmd_deadman ;;
--h|--help|help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//' ;;
-*) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+-h|--help|help) sed -n '3,23p' "$0" | sed 's/^# \{0,1\}//' ;;
+*) sed -n '3,23p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac

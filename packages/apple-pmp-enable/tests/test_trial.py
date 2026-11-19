@@ -484,6 +484,54 @@ class TrialTest(unittest.TestCase):
         self.assertIn("is not what update-m1n1 would write", r.stderr)
         self.assert_untouched()
 
+    def test_refusal_names_m1n1_update_disabled(self):
+        m = self.m
+        with open(m.path("sysconfig"), "a") as f:
+            f.write("M1N1_UPDATE_DISABLED=1\n")
+        m.write("esp/m1n1/boot.bin", m.before + b"x")
+        m.before = m.read("esp/m1n1/boot.bin")
+        r = m.run("check")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("M1N1_UPDATE_DISABLED is set", r.stderr)
+        self.assert_untouched()
+
+    def test_finds_an_entry_by_its_linux_line(self):
+        # An entry not named <machine-id>-<release>.conf is found by its
+        # linux line; the release has a '+', which must match literally.
+        m = self.m
+        os.rename(m.path(f"entries/{MID}-{KREL}.conf"), m.path("entries/custom.conf"))
+        r = self.ok(m.run("enable", "--dry-run"))
+        self.assertIn("add the boot entry custom-pmptrial", r.stdout)
+
+    def test_status_during_a_trial(self):
+        m = self.m
+        self.assertIn("never enabled", self.ok(m.run("status")).stdout)
+        self.enable()
+        self.assertIn("state               armed", self.ok(m.run("status")).stdout)
+
+    def test_dry_run_names_an_existing_pre_pmp_image(self):
+        m = self.m
+        m.write("esp/m1n1/boot.bin.pre-pmp", b"someone else's backup")
+        r = self.ok(m.run("enable", "--dry-run"))
+        self.assertIn("replaces the existing boot.bin.pre-pmp", r.stdout)
+        self.assertEqual(m.read("esp/m1n1/boot.bin.pre-pmp"), b"someone else's backup")
+
+    def test_deadman_option(self):
+        m = self.m
+        for args, msg in ((["--deadman"], "--deadman takes minutes"),
+                          (["--deadman", "4"], "at least 5 minutes"),
+                          (["--deadman", "x"], "--deadman takes minutes")):
+            r = m.run("enable", "--dry-run", *args)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn(msg, r.stderr)
+        self.assert_untouched()
+
+    def test_help(self):
+        r = self.ok(self.m.run("--help"))
+        self.assertTrue(r.stdout.startswith("apple-pmp-enable: turn on"), r.stdout)
+        self.assertNotIn("SPDX", r.stdout)
+        self.assertNotIn("pipefail", r.stdout)
+
     def test_refuses_another_default_kernel(self):
         m = self.m
         m.env["FAKE_DEFAULT"] = OLD

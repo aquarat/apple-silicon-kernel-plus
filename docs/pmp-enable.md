@@ -61,8 +61,9 @@ commit (default 15, at least 5).
 `check` refuses, among others, when: the board or its device tree is not
 validated; the running kernel is not the default one, or not the kernel
 the validated tree belongs to; `boot.bin` is not what `update-m1n1` would
-write now (run `update-m1n1`, restart once, then try again); the PMP is
-already on; a boot entry already sets `module_blacklist=` (the trial needs
+write now (run `update-m1n1`, restart once, then try again; with
+`M1N1_UPDATE_DISABLED` set in `/etc/sysconfig/update-m1n1`, `update-m1n1`
+does nothing, so remove that first); the PMP is already on; a boot entry already sets `module_blacklist=` (the trial needs
 that parameter); GRUB already has a one-shot boot pending (`next_entry`);
 the EFI partition mounted at `/boot/efi` is not the one m1n1 boots from.
 
@@ -72,7 +73,9 @@ the EFI partition mounted at `/boot/efi` is not the one m1n1 boots from.
 
 1. saves the current `boot.bin` as `m1n1/boot.bin.pre-pmp` on the EFI
    partition (and in `/var/lib/apple-pmp-enable`), with
-   `m1n1/PMP-RECOVERY.txt` beside it;
+   `m1n1/PMP-RECOVERY.txt` beside it. An existing `boot.bin.pre-pmp` is
+   replaced (`--dry-run` says so): copy it away first if it is a backup
+   of your own;
 2. adds `module_blacklist=pmp` to every boot entry (with grubby, so also
    to `/etc/kernel/cmdline` for kernels installed meanwhile). With the
    `pmp` module not loaded, the PMP device tree is inert: the PMP is not

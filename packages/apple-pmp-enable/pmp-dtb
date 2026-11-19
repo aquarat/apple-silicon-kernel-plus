@@ -224,7 +224,8 @@ def validate(validated, dtb, board=None):
         raise Refused(f"{b} is not a validated board (validated: {', '.join(known)})")
     kernels = ", ".join(r["kernel"] for r in rows if r["board"] == b)
     raise Refused(f"{dtb} (sha256 {s[:16]}...) is not a validated {b} device tree "
-                  f"(validated for {b}: {kernels}); a newer kernel needs a newer apple-pmp-enable")
+                  f"(validated for {b}: {kernels}); trees of any other kernel, older or newer, "
+                  f"or changed trees are refused until a package update lists them")
 
 
 def cmd_patch(a):
