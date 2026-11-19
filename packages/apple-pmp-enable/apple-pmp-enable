@@ -1,0 +1,579 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# apple-pmp-enable: turn on Apple's power management coprocessor (PMP) on an
+# M1 Pro or M1 Max, through a self-reverting trial boot. docs/pmp-enable.md
+# in https://github.com/aquarat/apple-silicon-kernel-plus explains what it
+# does, the risks and the recovery.
+#
+#   apple-pmp-enable status            what is on, what is staged
+#   apple-pmp-enable check             can this machine take the PMP? builds the
+#                                      candidate boot.bin in a temporary directory,
+#                                      changes nothing
+#   apple-pmp-enable enable [--dry-run] [--deadman MINUTES]
+#                                      stage a one-shot trial boot with the PMP on
+#                                      (does not restart the machine)
+#   apple-pmp-enable verify            on the trial boot: run the boot checks only
+#   apple-pmp-enable commit            on the trial boot: if the checks pass, keep
+#                                      the PMP on for every boot
+#   apple-pmp-enable abort             cancel a staged or running trial
+#   apple-pmp-enable disable           put the boot.bin from before back (PMP off
+#                                      from the next boot)
+#
+# Internal (systemd units): `boot` early in every boot during a trial,
+# `deadman` from the trial's dead-man timer.
+set -uo pipefail
+umask 022
+export LC_ALL=C
+
+# Paths, overridable for the tests (tests/test_trial.py) only.
+SHARE=${APPLE_PMP_SHARE:-/usr/share/apple-pmp-enable}
+LIBEXEC=${APPLE_PMP_LIBEXEC:-/usr/libexec/apple-pmp-enable}
+STATE_DIR=${APPLE_PMP_STATE_DIR:-/var/lib/apple-pmp-enable}
+DT=${APPLE_PMP_DT:-/proc/device-tree}
+SYSFS=${APPLE_PMP_SYSFS:-/sys}
+CMDLINE=${APPLE_PMP_CMDLINE:-/proc/cmdline}
+BOOT_ID_FILE=${APPLE_PMP_BOOT_ID:-/proc/sys/kernel/random/boot_id}
+SYSCONFIG=${APPLE_PMP_SYSCONFIG:-/etc/sysconfig/update-m1n1}
+ENTRIES=${APPLE_PMP_ENTRIES:-/boot/loader/entries}
+MACHINE_ID_FILE=${APPLE_PMP_MACHINE_ID:-/etc/machine-id}
+ETC_SYSTEMD=${APPLE_PMP_ETC_SYSTEMD:-/etc/systemd}
+MODDIR=${APPLE_PMP_MODULES:-/usr/lib/modules}
+# The ESP must be mounted here: the units wait for this mount point.
+ESP_MOUNT=${APPLE_PMP_ESP:-/boot/efi}
+KREL=${APPLE_PMP_KREL:-$(uname -r)}
+
+STATE=$STATE_DIR/state
+VALIDATED=$SHARE/validated.txt
+PMPDTB=$LIBEXEC/pmp-dtb
+TRIAL_FLAG=apple_pmp_enable.trial=1
+TRIAL_ARGS="$TRIAL_FLAG panic=10 watchdog.open_timeout=90 softlockup_panic=1 rd.emergency=reboot"
+BLACKLIST=module_blacklist=pmp
+UNITS=(apple-pmp-trial.service apple-pmp-deadman.timer)
+# Boot-safety drop-ins, installed for the trial window only:
+# <file in $SHARE/boot-safety> <directory under $ETC_SYSTEMD>
+DROPINS=(
+    "emergency.conf system/emergency.service.d"
+    "rescue.conf system/rescue.service.d"
+    "boot-deadline.conf system/multi-user.target.d"
+    "watchdog.conf system.conf.d"
+)
+DROPIN_NAME=50-apple-pmp-trial.conf
+
+say() { echo "apple-pmp-enable: $*"; }
+logk() {
+    say "$*"
+    { echo "apple-pmp-enable: $*" > /dev/kmsg; } 2>/dev/null || :
+}
+die() { echo "apple-pmp-enable: $*" >&2; exit 1; }
+sum() { sha256sum "$1" | cut -d' ' -f1; }
+short() { cut -c1-16 <<<"$1"; }
+boot_id() { cat "$BOOT_ID_FILE"; }
+need_root() { [ "$(id -u)" = 0 ] || [ -n "${APPLE_PMP_TEST:-}" ] || die "run as root"; }
+
+# ---- state file: key=value lines -------------------------------------------
+st() { [ -f "$STATE" ] && sed -n "s/^$1=//p" "$STATE" | tail -1; }
+st_set() {
+    local k v kv tmp
+    mkdir -p "$STATE_DIR"
+    tmp=$(mktemp "$STATE_DIR/.state.XXXXXX")
+    [ -f "$STATE" ] && grep -v -E "^($(printf '%s|' "${@%%=*}" | sed 's/|$//'))=" "$STATE" > "$tmp"
+    for kv in "$@"; do k=${kv%%=*}; v=${kv#*=}; printf '%s=%s\n' "$k" "$v" >> "$tmp"; done
+    sync "$tmp" 2>/dev/null || :
+    mv -f "$tmp" "$STATE"
+    sync "$STATE_DIR" 2>/dev/null || :
+}
+phase() { st phase; }
+
+# ---- the machine ------------------------------------------------------------
+board() { "$PMPDTB" board --dt "$DT"; }
+esp_dir() { echo "$ESP_MOUNT/m1n1"; }
+
+check_esp() {
+    local uuid dev want
+    [ -f "$(esp_dir)/boot.bin" ] || die "no $(esp_dir)/boot.bin: the ESP is not mounted at $ESP_MOUNT"
+    [ -n "${APPLE_PMP_TEST:-}" ] && return 0
+    # The ESP that m1n1 stage 1 reads is the one named in the device tree.
+    uuid=$(tr -d '\0' < "$DT/chosen/asahi,efi-system-partition" 2>/dev/null)
+    [ -n "$uuid" ] || die "the device tree does not name the system ESP (chosen/asahi,efi-system-partition)"
+    want=$(readlink -f "/dev/disk/by-partuuid/$uuid")
+    dev=$(findmnt -n -o SOURCE --target "$ESP_MOUNT")
+    [ "$(readlink -f "$dev")" = "$want" ] ||
+        die "$ESP_MOUNT is $dev, but m1n1 boots from the ESP with PARTUUID $uuid ($want)"
+}
+
+# write SRC to DST on the ESP: copy beside it, sync, rename, verify
+esp_write() {
+    local src=$1 dst=$2
+    cp "$src" "$dst.new" && sync && mv -f "$dst.new" "$dst" && sync || return 1
+    cmp -s "$src" "$dst"
+}
+
+# What update-m1n1 would use: sets M1N1 U_BOOT DTB_LIST CONF_LINES
+read_m1n1_config() {
+    local out
+    out=$(
+        SOURCE='' M1N1='' U_BOOT='' DTBS='' CONFIG=''
+        # shellcheck disable=SC1090
+        . "$SYSCONFIG" || exit 1
+        : "${SOURCE:=/usr/lib/asahi-boot/}"
+        : "${M1N1:=$SOURCE/m1n1.bin}"
+        : "${U_BOOT:=$SOURCE/u-boot-nodtb.bin}"
+        : "${CONFIG:=/etc/m1n1.conf}"
+        printf '%s\n' "$M1N1" "$U_BOOT" "$DTBS" "$CONFIG"
+    ) || die "cannot read $SYSCONFIG"
+    { read -r M1N1; read -r U_BOOT; read -r DTBS; read -r CONFIG; } <<<"$out"
+    [ -n "$DTBS" ] || die "DTBS is not set in $SYSCONFIG"
+    [ -f "$M1N1" ] && [ -f "$U_BOOT" ] || die "m1n1 ($M1N1) or U-Boot ($U_BOOT) missing"
+    # Same expansion as update-m1n1.
+    if [ -L "$DTBS" ] && [ ! -d "$DTBS" ]; then
+        DTBS="$MODDIR/$(readlink "$DTBS" | sed -e 's/^dtb-//')/dtb"
+    fi
+    DTB_LIST=()
+    if [ -d "$DTBS" ]; then
+        local f
+        for f in "$DTBS"/apple/t6*.dtb "$DTBS"/apple/t81*.dtb; do DTB_LIST+=("$f"); done
+    else
+        read -r -a DTB_LIST <<<"$DTBS"
+    fi
+    CONF_LINES=""
+    if [ -e "$CONFIG" ]; then
+        local line
+        while read -r line; do
+            case "$line" in
+            chosen.*=*|display=*|mitigations=*) CONF_LINES+="$line"$'\n' ;;
+            esac
+        done < "$CONFIG"
+    fi
+}
+
+# assemble OUT DTB...: m1n1, the DTBs, gzip'd U-Boot, m1n1 options (update-m1n1's format)
+assemble() {
+    local out=$1; shift
+    { cat "$M1N1" "$@" && gzip -c "$U_BOOT" && printf '%s' "$CONF_LINES"; } > "$out"
+}
+
+default_kernel() {
+    local d
+    d=$(grubby --default-kernel 2>/dev/null) || return 1
+    echo "${d#/boot/vmlinuz-}"
+}
+
+entry_file() {   # the BLS entry of kernel $1
+    local mid f
+    mid=$(cat "$MACHINE_ID_FILE")
+    f="$ENTRIES/$mid-$1.conf"
+    if [ -f "$f" ]; then echo "$f"; return 0; fi
+    grep -l -E "^linux[[:space:]]+(/boot)?/vmlinuz-$1\$" "$ENTRIES"/*.conf 2>/dev/null | grep -v -- '-pmptrial\.conf$' | head -1
+}
+
+memvote_pmp() {   # 1: the PMP is running (kernel-plus 0034 reports it)
+    local f
+    for f in "$SYSFS"/bus/platform/devices/apple-cpu-memvote.*/stats; do
+        [ -r "$f" ] && sed -n 's/.* pmp \([01]\)$/\1/p' "$f" && return 0
+    done
+    echo "?"
+}
+
+# ---- preflight + candidate ----------------------------------------------------
+# Sets BOARD, BEFORE (the ESP boot.bin), CANDIDATE, ROW; WORK is the work dir.
+prepare() {
+    WORK=$1
+    local b i patched=() found=0 d
+    need_root
+    [ -n "${APPLE_PMP_TEST:-}" ] || [ "$(uname -m)" = aarch64 ] || die "not an aarch64 machine"
+    check_esp
+    BOARD=$(board) || die "cannot tell this machine's board from $DT/compatible"
+    say "board $BOARD, kernel $KREL"
+    if [ -e "$DT/aliases/pmp" ]; then
+        die "this boot already has the PMP enabled in its device tree (status: apple-pmp-enable status)"
+    fi
+    case "$(phase)" in arming|armed|trial) die "a trial is in progress (apple-pmp-enable status)" ;; esac
+    d=$(default_kernel) || die "cannot read the default kernel (grubby --default-kernel)"
+    [ "$d" = "$KREL" ] || die "the default kernel is $d, the running one $KREL: boot the default kernel first"
+    ls "$MODDIR/$KREL"/kernel/drivers/soc/apple/pmp.ko* >/dev/null 2>&1 ||
+        die "kernel $KREL has no PMP driver (pmp.ko): use this project's kernel"
+    [ -n "$(entry_file "$KREL")" ] || die "no boot entry for $KREL in $ENTRIES"
+    # shellcheck disable=SC2016 # a literal $kernelopts
+    grep -q '^options .*\$kernelopts' "$(entry_file "$KREL")" &&
+        die "the boot entry takes its options from \$kernelopts in grubenv; not supported"
+    if grep -qw -e 'module_blacklist=[^ ]*' "$CMDLINE" ||
+       grep -l -E '^options .*module_blacklist=' "$ENTRIES"/*.conf >/dev/null 2>&1; then
+        die "a boot entry already sets module_blacklist=; the trial needs that parameter (remove yours first)"
+    fi
+    command -v grub2-editenv >/dev/null || die "grub2-editenv missing: the trial needs GRUB"
+    if grub2-editenv - list 2>/dev/null | grep -q '^next_entry=.'; then
+        die "GRUB already has a one-shot boot pending ($(grub2-editenv - list | sed -n 's/^next_entry=//p')); boot it or clear it first"
+    fi
+
+    read_m1n1_config
+    for i in "${!DTB_LIST[@]}"; do
+        if [ "$(basename "${DTB_LIST[$i]}")" = "$BOARD.dtb" ]; then found=1; b=${DTB_LIST[$i]}; fi
+    done
+    [ $found = 1 ] || die "$BOARD.dtb is not among the device trees update-m1n1 uses ($DTBS)"
+    ROW=$("$PMPDTB" validate --validated "$VALIDATED" --board "$BOARD" "$b") || exit 1
+    [ "$(cut -d' ' -f2 <<<"$ROW")" = "$KREL" ] ||
+        die "$BOARD's tree is validated for kernel $(cut -d' ' -f2 <<<"$ROW"), this is $KREL"
+    say "device tree $b: validated ($ROW)"
+
+    BEFORE=$(esp_dir)/boot.bin
+    assemble "$WORK/rebuilt.bin" "${DTB_LIST[@]}"
+    if ! cmp -s "$WORK/rebuilt.bin" "$BEFORE"; then
+        die "$BEFORE ($(short "$(sum "$BEFORE")")...) is not what update-m1n1 would write now from $SYSCONFIG.
+  The trial must change only the PMP. Run update-m1n1, restart, check that the
+  machine boots normally, then run this again."
+    fi
+    say "$BEFORE reproduces from m1n1 + ${#DTB_LIST[@]} device trees + U-Boot"
+    "$PMPDTB" patch --validated "$VALIDATED" --board "$BOARD" "$b" "$WORK/$BOARD.dtb" || exit 1
+    for i in "${!DTB_LIST[@]}"; do
+        if [ "${DTB_LIST[$i]}" = "$b" ]; then patched+=("$WORK/$BOARD.dtb"); else patched+=("${DTB_LIST[$i]}"); fi
+    done
+    CANDIDATE=$WORK/boot-pmp.bin
+    assemble "$CANDIDATE" "${patched[@]}"
+    say "candidate boot.bin $(short "$(sum "$CANDIDATE")")...: only $BOARD.dtb differs"
+    local free need
+    free=$(df --output=avail -B1 "$ESP_MOUNT" | tail -1)
+    need=$(( 3 * $(stat -c %s "$CANDIDATE") ))
+    [ "$free" -gt "$need" ] || die "the ESP has $free bytes free, the trial needs $need"
+}
+
+recovery_note() {
+    cat <<EOF
+apple-pmp-enable: m1n1/boot.bin.pre-pmp is the boot.bin from before the PMP
+was turned on ($(date -u +%FT%TZ), kernel $KREL, board $BOARD).
+
+If the machine does not boot with the PMP: start macOS recovery (hold the
+power button until "Loading startup options", choose Options), open
+Terminal and run
+
+  diskutil list                       # find the EFI partition of the Linux install
+  diskutil mount diskXsY              # it mounts under /Volumes
+  cp /Volumes/<that volume>/m1n1/boot.bin.pre-pmp /Volumes/<that volume>/m1n1/boot.bin
+
+then restart. Details: docs/pmp-enable.md in
+https://github.com/aquarat/apple-silicon-kernel-plus
+EOF
+}
+
+# ---- trial set-up and clean-up ------------------------------------------------
+install_trial_bits() {   # entry file, minutes
+    local src=$1 min=$2 mid id dst d f dir
+    mid=$(cat "$MACHINE_ID_FILE")
+    id="$mid-$KREL-pmptrial"
+    dst="$ENTRIES/$id.conf"
+    grubby --update-kernel=ALL --args="$BLACKLIST" >/dev/null || return 1
+    sed -e '/^title /s/$/ (PMP trial)/' \
+        -e "/^options /{s/ $BLACKLIST//g; s/\$/ $TRIAL_ARGS/}" "$src" > "$dst" || return 1
+    grep -q "^options .*$TRIAL_FLAG" "$dst" || { rm -f "$dst"; say "boot entry $src has no options line"; return 1; }
+    for d in "${DROPINS[@]}"; do
+        f=${d%% *}; dir=$ETC_SYSTEMD/${d#* }
+        mkdir -p "$dir" && install -m 0644 "$SHARE/boot-safety/$f" "$dir/$DROPIN_NAME" || return 1
+    done
+    mkdir -p "$ETC_SYSTEMD/system/apple-pmp-deadman.timer.d"
+    printf '[Timer]\nOnBootSec=\nOnBootSec=%smin\n' "$min" \
+        > "$ETC_SYSTEMD/system/apple-pmp-deadman.timer.d/$DROPIN_NAME"
+    systemctl daemon-reload && systemctl enable "${UNITS[@]}" >/dev/null 2>&1 || return 1
+    echo "$id"
+}
+
+# Undo everything enable added except the boot.bin. $1=early: during early
+# boot (no daemon-reload; the drop-ins stay loaded until the next boot).
+remove_trial_bits() {
+    local early=${1:-} id d
+    id=$(st entry)
+    if [ "$(st added_blacklist)" = yes ]; then
+        grubby --update-kernel=ALL --remove-args="$BLACKLIST" >/dev/null || say "could not remove $BLACKLIST from the boot entries"
+    fi
+    [ -n "$id" ] && rm -f "$ENTRIES/$id.conf"
+    if [ -n "$id" ] && grub2-editenv - list 2>/dev/null | grep -qx "next_entry=$id"; then
+        grub2-editenv - unset next_entry || :
+    fi
+    for d in "${DROPINS[@]}"; do rm -f "$ETC_SYSTEMD/${d#* }/$DROPIN_NAME"; done
+    rm -f "$ETC_SYSTEMD/system/apple-pmp-deadman.timer.d/$DROPIN_NAME"
+    rmdir "$ETC_SYSTEMD/system/apple-pmp-deadman.timer.d" 2>/dev/null || :
+    if [ "$early" = early ]; then
+        systemctl --no-reload disable "${UNITS[@]}" >/dev/null 2>&1 || :
+    else
+        systemctl stop apple-pmp-deadman.timer >/dev/null 2>&1 || :
+        systemctl disable "${UNITS[@]}" >/dev/null 2>&1 || :
+        systemctl daemon-reload || :
+    fi
+}
+
+restore_before() {   # put the saved boot.bin back on the ESP
+    local esp pre want
+    esp=$(st esp_dir); pre=$esp/boot.bin.pre-pmp; want=$(st before_sha)
+    if [ "$(sum "$esp/boot.bin")" = "$want" ]; then return 0; fi
+    if [ -f "$pre" ] && [ "$(sum "$pre")" = "$want" ]; then
+        esp_write "$pre" "$esp/boot.bin" && return 0
+    fi
+    if [ -f "$STATE_DIR/boot.bin.before" ] && [ "$(sum "$STATE_DIR/boot.bin.before")" = "$want" ]; then
+        esp_write "$STATE_DIR/boot.bin.before" "$esp/boot.bin" && return 0
+    fi
+    return 1
+}
+
+# ---- commands -------------------------------------------------------------------
+cmd_status() {
+    local esp b
+    esp=$(esp_dir)
+    b=$(board 2>/dev/null || echo unknown)
+    echo "board               $b"
+    echo "running kernel      $KREL"
+    if [ -e "$DT/aliases/pmp" ]; then
+        echo "this boot           PMP enabled in the device tree; PMP running: $(memvote_pmp)"
+    else
+        echo "this boot           PMP not enabled in the device tree"
+    fi
+    if [ -r "$esp/boot.bin" ]; then
+        echo "ESP boot.bin        $(short "$(sum "$esp/boot.bin")")... $("$PMPDTB" bootbin "$esp/boot.bin" 2>/dev/null |
+            awk -v b="$b" '$1 == b { print ($3 == "pmp" ? "(" b ": PMP on)" : "(" b ": PMP off)") }')"
+    else
+        echo "ESP boot.bin        not readable (run as root)"
+    fi
+    [ -f "$esp/boot.bin.pre-pmp" ] && echo "ESP boot.bin.pre-pmp $(short "$(sum "$esp/boot.bin.pre-pmp")")... (the boot.bin from before the PMP)"
+    if [ -f "$STATE" ]; then
+        echo "state               $(phase) (since $(st date))"
+        [ -n "$(st note)" ] && echo "                    $(st note)"
+    else
+        echo "state               never enabled"
+    fi
+}
+
+cmd_check() {
+    local w
+    w=$(mktemp -d) || exit 1
+    # shellcheck disable=SC2064
+    trap "rm -rf '$w'" EXIT
+    prepare "$w"
+    say "check passed: 'apple-pmp-enable enable' would stage this candidate (nothing was changed)"
+}
+
+cmd_enable() {
+    local dry=0 min=15 w esp src id cand_sha before_sha
+    while [ $# -gt 0 ]; do
+        case $1 in
+        --dry-run) dry=1 ;;
+        --deadman) min=${2:?minutes}; shift ;;
+        *) die "unknown option $1" ;;
+        esac
+        shift
+    done
+    case $min in ''|*[!0-9]*) die "--deadman takes minutes" ;; esac
+    [ "$min" -ge 5 ] || die "--deadman: at least 5 minutes"
+    w=$(mktemp -d) || exit 1
+    # shellcheck disable=SC2064
+    trap "rm -rf '$w'" EXIT
+    prepare "$w"
+    esp=$(esp_dir); src=$(entry_file "$KREL")
+    if [ $dry = 1 ]; then
+        cat <<EOF
+apple-pmp-enable: dry run: nothing was changed. enable would:
+  1. save $esp/boot.bin as $esp/boot.bin.pre-pmp (and in $STATE_DIR), with PMP-RECOVERY.txt beside it
+  2. add $BLACKLIST to every boot entry (so any boot but the trial starts no PMP)
+  3. add the boot entry $(basename "$src" .conf)-pmptrial, without it, with: $TRIAL_ARGS
+  4. install the boot-safety drop-ins (emergency/rescue mode and a 15 min boot deadline restart
+     the machine, systemd hardware watchdog) and enable ${UNITS[*]} (dead-man $min min)
+  5. write the candidate boot.bin to $esp/boot.bin
+  6. make the trial entry GRUB's next boot (once)
+Then, at your next restart: the trial boot puts the old boot.bin back as soon as it reaches
+early user space; 'apple-pmp-enable commit' within $min minutes keeps the PMP; otherwise the
+machine restarts into the old state.
+EOF
+        return 0
+    fi
+
+    cand_sha=$(sum "$CANDIDATE"); before_sha=$(sum "$BEFORE")
+    mkdir -p "$STATE_DIR"; chmod 700 "$STATE_DIR"
+    if ! { cp "$CANDIDATE" "$STATE_DIR/boot.bin.pmp" && cp "$BEFORE" "$STATE_DIR/boot.bin.before" &&
+           cp "$w/$BOARD.dtb" "$STATE_DIR/$BOARD-pmp.dtb"; }; then
+        die "cannot write $STATE_DIR"
+    fi
+    esp_write "$BEFORE" "$esp/boot.bin.pre-pmp" || die "cannot save $esp/boot.bin.pre-pmp"
+    recovery_note > "$esp/PMP-RECOVERY.txt.new" && mv -f "$esp/PMP-RECOVERY.txt.new" "$esp/PMP-RECOVERY.txt"
+    st_set phase=arming "date=$(date -u +%FT%TZ)" "kernel=$KREL" "board=$BOARD" "esp_dir=$esp" \
+        "before_sha=$before_sha" "candidate_sha=$cand_sha" added_blacklist=yes entry= boot_id= note=
+
+    if ! id=$(install_trial_bits "$src" "$min") || [ -z "$id" ] ||
+       ! st_set "entry=$id" ||
+       ! esp_write "$STATE_DIR/boot.bin.pmp" "$esp/boot.bin" ||
+       ! grub2-editenv - set "next_entry=$id"; then
+        say "setting up the trial failed; undoing"
+        [ -z "$(st entry)" ] && st_set "entry=$(cat "$MACHINE_ID_FILE")-$KREL-pmptrial"
+        restore_before || say "could not restore $esp/boot.bin: copy $esp/boot.bin.pre-pmp over it before restarting"
+        remove_trial_bits
+        st_set phase=failed "note=setting up the trial failed; nothing is staged"
+        exit 1
+    fi
+    st_set phase=armed
+    logk "trial staged: next boot uses the PMP boot.bin $(short "$cand_sha")... once (entry $id); saved $(short "$before_sha")... as boot.bin.pre-pmp"
+    cat <<EOF
+
+Restart when ready. On the trial boot:
+  - the old boot.bin is put back as soon as the boot reaches early user space,
+    so any later restart is back to normal;
+  - log in and run:  sudo apple-pmp-enable commit   (within $min minutes)
+  - without a commit the machine restarts after $min minutes, without the PMP.
+If the machine does not start at all: recovery steps in $esp/PMP-RECOVERY.txt
+(macOS recovery, copy m1n1/boot.bin.pre-pmp over m1n1/boot.bin).
+To cancel before restarting: sudo apple-pmp-enable abort
+EOF
+}
+
+# Early in every boot while a trial is set up (apple-pmp-trial.service).
+cmd_boot() {
+    local p cur esp
+    [ -f "$STATE" ] || exit 0
+    p=$(phase); cur=$(boot_id); esp=$(st esp_dir)
+    case "$p" in
+    armed|arming)
+        if [ "$p" = armed ] && grep -qw "$TRIAL_FLAG" "$CMDLINE"; then
+            if restore_before; then
+                st_set phase=trial "boot_id=$cur" "note=trial boot; boot.bin put back"
+                logk "PMP trial boot: the device tree has the PMP for this boot only; boot.bin is back to $(short "$(st before_sha)")... Run 'apple-pmp-enable commit' to keep it."
+            else
+                st_set phase=trial "boot_id=$cur" "note=trial boot; putting boot.bin back FAILED"
+                logk "PMP trial boot: could NOT put $esp/boot.bin back; see PMP-RECOVERY.txt"
+            fi
+        else
+            # Armed, but this is not the trial boot: it never got this far
+            # (or another entry was chosen). Its entries blacklist pmp, so
+            # the PMP did not start; undo everything.
+            restore_before || logk "could NOT put $esp/boot.bin back; see PMP-RECOVERY.txt"
+            remove_trial_bits early
+            st_set phase=failed "note=the trial boot did not reach early user space (or another boot entry was used); reverted"
+            logk "PMP trial: the trial boot never reached early user space; boot.bin and boot entries reverted"
+        fi ;;
+    trial)
+        [ "$(st boot_id)" = "$cur" ] && exit 0
+        restore_before || logk "could NOT put $esp/boot.bin back; see PMP-RECOVERY.txt"
+        remove_trial_bits early
+        st_set phase=reverted "note=the trial boot ended without a commit; reverted"
+        logk "PMP trial ended without a commit: reverted to the previous boot.bin and boot entries" ;;
+    esac
+    exit 0
+}
+
+cmd_deadman() {
+    [ "$(phase)" = trial ] && [ "$(st boot_id)" = "$(boot_id)" ] || exit 0
+    logk "PMP trial not committed in time: restarting into the previous boot.bin"
+    systemctl reboot
+    sleep "${APPLE_PMP_GRACE:-120}"
+    systemctl --force reboot
+}
+
+# The boot checks; 0 if all pass.
+verify() {
+    local fail=0 node nst n log pmp
+    pass() { echo "PASS $*"; }
+    bad() { echo "FAIL $*"; fail=1; }
+    if grep -qw "$TRIAL_FLAG" "$CMDLINE"; then pass "this is the trial boot"
+    else bad "this is not the trial boot ($TRIAL_FLAG not on the command line)"; fi
+    if [ -e "$DT/aliases/pmp" ]; then
+        node=$(tr -d '\0' < "$DT/aliases/pmp")
+        pass "device tree has the pmp alias ($node)"
+        nst=$(tr -d '\0' < "$DT$node/status" 2>/dev/null)
+        n=$(find "$DT$node" -maxdepth 1 -name 'apple,tunable-*' 2>/dev/null | wc -l)
+        if [ "$nst" = okay ] && [ "$n" -gt 0 ]; then pass "m1n1 set the PMP node up ($n tunables)"
+        else bad "PMP node status '$nst', $n tunables (m1n1 did not set it up)"; fi
+    else
+        bad "no pmp alias in this boot's device tree"
+    fi
+    pmp=$(memvote_pmp)
+    if [ "$pmp" = 1 ]; then pass "the PMP is running (apple-cpu-memvote: pmp 1)"
+    else bad "the PMP is not running (apple-cpu-memvote reports pmp $pmp)"; fi
+    log=$(journalctl -k -b 0 --no-pager 2>/dev/null | grep -E 'PMP firmware crashed|apple[-_]pmp.*(Failed|error|crash)|pmp.*RTKit.*(crash|exception)')
+    if [ -z "$log" ]; then pass "no PMP errors in the kernel log"
+    else bad "PMP errors in the kernel log: $(head -3 <<<"$log")"; fi
+    n=$(systemctl --failed --no-legend 2>/dev/null | wc -l)
+    echo "info $n failed systemd unit(s)$([ "$n" -gt 0 ] && echo ': systemctl --failed')"
+    return $fail
+}
+
+cmd_verify() { verify; }
+
+cmd_commit() {
+    local esp
+    need_root
+    [ "$(phase)" = trial ] && [ "$(st boot_id)" = "$(boot_id)" ] ||
+        die "not on a trial boot (state: $(phase); apple-pmp-enable status)"
+    verify || die "a check failed: not committing. The machine goes back to the previous state at
+  the dead-man restart, or now with: apple-pmp-enable abort && systemctl reboot"
+    esp=$(st esp_dir)
+    [ "$(sum "$STATE_DIR/boot.bin.pmp")" = "$(st candidate_sha)" ] || die "$STATE_DIR/boot.bin.pmp changed; not committing"
+    esp_write "$STATE_DIR/boot.bin.pmp" "$esp/boot.bin" || {
+        restore_before
+        die "writing $esp/boot.bin failed; the previous boot.bin is back"
+    }
+    remove_trial_bits
+    st_set phase=committed "date=$(date -u +%FT%TZ)" boot_id= "note=PMP on; boot.bin $(short "$(st candidate_sha)")..."
+    logk "committed: the PMP stays on (boot.bin $(short "$(st candidate_sha)")...). The previous image stays as m1n1/boot.bin.pre-pmp."
+    cat <<EOF
+A kernel or m1n1 update that runs update-m1n1 writes stock device trees again, which turns the
+PMP off; run 'apple-pmp-enable enable' again after such an update once this package lists the
+new kernel. To turn it off: sudo apple-pmp-enable disable
+EOF
+}
+
+cmd_abort() {
+    need_root
+    case "$(phase)" in
+    arming|armed)
+        restore_before || die "could not put $(st esp_dir)/boot.bin back: copy boot.bin.pre-pmp over it"
+        remove_trial_bits
+        st_set phase=aborted "date=$(date -u +%FT%TZ)" "note=aborted before the trial boot"
+        say "aborted: boot.bin and boot entries are as before" ;;
+    trial)
+        restore_before || die "could not put $(st esp_dir)/boot.bin back: copy boot.bin.pre-pmp over it"
+        remove_trial_bits
+        st_set phase=aborted "date=$(date -u +%FT%TZ)" "note=aborted on the trial boot"
+        say "aborted: this boot keeps the PMP until it ends; from the next boot everything is as before" ;;
+    *) die "no trial in progress (state: $(phase))" ;;
+    esac
+}
+
+cmd_disable() {
+    local esp cur w b
+    need_root
+    case "$(phase)" in arming|armed|trial) die "a trial is in progress: apple-pmp-enable abort" ;; esac
+    esp=$(esp_dir)
+    [ -f "$STATE" ] && esp=$(st esp_dir)
+    cur=$(sum "$esp/boot.bin")
+    b=$(board) || die "cannot tell this machine's board"
+    if ! "$PMPDTB" bootbin "$esp/boot.bin" | awk -v b="$b" '$1 == b && $3 == "pmp" { f = 1 } END { exit !f }'; then
+        say "$esp/boot.bin has no PMP device tree for $b: nothing to do"
+        [ -e "$DT/aliases/pmp" ] && say "(this boot still has the PMP; it ends at the next restart)"
+        return 0
+    fi
+    if [ "$cur" = "$(st candidate_sha)" ] && [ -f "$esp/boot.bin.pre-pmp" ] &&
+       [ "$(sum "$esp/boot.bin.pre-pmp")" = "$(st before_sha)" ]; then
+        esp_write "$esp/boot.bin.pre-pmp" "$esp/boot.bin" || die "writing $esp/boot.bin failed"
+        say "boot.bin.pre-pmp is back as boot.bin"
+    else
+        # boot.bin changed since the commit (or was made elsewhere): write
+        # what update-m1n1 would, with the stock device trees.
+        w=$(mktemp -d) || exit 1
+        # shellcheck disable=SC2064
+        trap "rm -rf '$w'" EXIT
+        read_m1n1_config
+        assemble "$w/boot.bin" "${DTB_LIST[@]}"
+        cp "$esp/boot.bin" "$esp/boot.bin.old"
+        esp_write "$w/boot.bin" "$esp/boot.bin" || die "writing $esp/boot.bin failed"
+        say "wrote boot.bin with the stock device trees (the PMP one is boot.bin.old)"
+    fi
+    st_set phase=disabled "date=$(date -u +%FT%TZ)" "note=PMP off from the next boot"
+    logk "disabled: the PMP is off from the next boot"
+}
+
+case "${1:-}" in
+status) cmd_status ;;
+check) cmd_check ;;
+enable) shift; cmd_enable "$@" ;;
+verify) cmd_verify ;;
+commit) cmd_commit ;;
+abort) cmd_abort ;;
+disable) cmd_disable ;;
+boot) cmd_boot ;;
+deadman) cmd_deadman ;;
+-h|--help|help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//' ;;
+*) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac

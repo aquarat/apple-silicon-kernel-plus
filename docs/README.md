@@ -68,6 +68,7 @@ and in the document of the patch that needs them.
 | `mesa-honeykrisp-plus` | `packages/mesa-honeykrisp-plus/patches/0001-0002` | [honeykrisp-16bit-varyings.md](honeykrisp-16bit-varyings.md) |
 | `mesa-coopmat` | a pinned Mesa branch (no patch files) | [mesa-coopmat.md](mesa-coopmat.md) |
 | `qemu-vmapple` | a pinned QEMU fork (no patch files) | [packages/qemu-vmapple/README.md](../packages/qemu-vmapple/README.md); KVM side: [kvm-macos-guests.md](kvm-macos-guests.md) |
+| `apple-pmp-enable` | `pmp-dtb` (the `APPLE_USE_PMP` device tree fixup), `apple-pmp-enable` (the trial boot), `validated.txt` | [pmp-enable.md](pmp-enable.md) |
 | `reims-vgpu-backend` | a pinned Reims fork (no patch files) | [packages/reims-vgpu-backend/README.md](../packages/reims-vgpu-backend/README.md) |
 
 `qemu-vmapple` and `reims-vgpu-backend` build forks whose changes are

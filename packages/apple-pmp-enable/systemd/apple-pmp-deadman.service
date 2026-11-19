@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-only
+[Unit]
+Description=apple-pmp-enable: restart an uncommitted PMP trial boot
+Documentation=file:/usr/share/doc/apple-pmp-enable/README.md
+ConditionKernelCommandLine=apple_pmp_enable.trial=1
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/apple-pmp-enable deadman

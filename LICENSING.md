@@ -18,6 +18,7 @@ Our scripts carry `SPDX-License-Identifier: GPL-2.0-only` headers.
 | mesa-honeykrisp-plus | `MIT` | the Asahi Vulkan driver part of Mesa is MIT |
 | qemu-vmapple | `GPL-2.0-only AND GPL-2.0-or-later AND LGPL-2.1-or-later AND MIT AND BSD-2-Clause AND BSD-3-Clause` | QEMU only; see below |
 | reims-vgpu-backend | `LGPL-3.0-or-later AND GPL-2.0-or-later AND Apache-2.0 AND` the other crate licences | Reims, metal2vulkan and Rust crates; see below |
+| apple-pmp-enable | `GPL-2.0-only` | this project's scripts; see below |
 
 ## Kernel patches
 
@@ -103,6 +104,19 @@ to decompress the kernelcache; it is a separate program, not linked.
 Mesa is mostly MIT; the files built here (the Asahi Vulkan driver and the
 shared code it links) are MIT. `packages/mesa-honeykrisp-plus/patches/*.patch`
 are offered under MIT, Mesa's licence.
+
+## apple-pmp-enable
+
+`apple-pmp-enable`, `pmp-dtb`, the units, drop-ins and tests are this
+project's work, `GPL-2.0-only`. They were written from the Linux device
+tree sources (the `APPLE_USE_PMP` blocks, `GPL-2.0+ OR MIT`), from
+m1n1's `dt_set_pmp()` (MIT; read for what it requires, no code taken)
+and from `update-m1n1` (asahi-scripts, MIT; its image layout is
+re-implemented, no code taken). The test device trees in
+`packages/apple-pmp-enable/tests/dtb/` are compiled from this project's
+kernel sources (`GPL-2.0+ OR MIT`, as their `.dts` files say). No Apple
+data is in the package: m1n1 copies the PMP's tunables from the Mac's own
+Apple device tree at boot.
 
 ## qemu-vmapple and reims-vgpu-backend
 

@@ -30,6 +30,7 @@ declare -A SPEC=(
     [mesa-coopmat]=packages/mesa-coopmat/mesa-coopmat.spec
     [qemu-vmapple]=packages/qemu-vmapple/qemu-vmapple.spec
     [reims-vgpu-backend]=packages/reims-vgpu-backend/reims-vgpu-backend.spec
+    [apple-pmp-enable]=packages/apple-pmp-enable/apple-pmp-enable.spec
 )
 # qemu-vmapple contains no Reims code; Reims is the separate program
 # reims-vgpu-backend (LICENSING.md, qemu-vmapple and reims-vgpu-backend).
@@ -37,7 +38,7 @@ declare -A SPEC=(
 # Build timeouts in seconds (COPR's default is 5 hours).
 declare -A TIMEOUT=([kernel]=72000 [qemu-vmapple]=36000 [reims-vgpu-backend]=36000
                     [mesa-honeykrisp-plus]=18000 [mesa-coopmat]=18000 [apple-avd]=3600 [apple-ave]=3600
-                    [apple-silicon-thunderbolt]=3600)
+                    [apple-silicon-thunderbolt]=3600 [apple-pmp-enable]=3600)
 
 # Appended to the project description: the licences, and the trademarks it names.
 LICENCE_NOTE="Licences: the kernel and the AVD/AVE drivers GPL-2.0-only (the AVD driver also MIT and BSD-2-Clause files); Mesa MIT; QEMU GPL-2.0-only with GPL-2.0-compatible files; Reims LGPL-3.0-or-later and GPL-2.0-or-later with permissively licensed Rust crates; this project's scripts GPL-2.0-only. Details: https://github.com/aquarat/apple-silicon-kernel-plus/blob/main/LICENSING.md. No Apple firmware or macOS software is included. Fedora is a trademark of Red Hat, Inc.; Apple, Mac and Metal are trademarks of Apple Inc."

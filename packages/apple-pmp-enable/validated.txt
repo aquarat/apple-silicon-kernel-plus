@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Device trees apple-pmp-enable patches (docs/pmp-enable.md). Anything else is
+# refused. A row is one stock device tree, as this project's kernel package
+# ships it, that
+#   - passes `pmp-dtb check` against a -DAPPLE_USE_PMP build of the same source, and
+#   - was booted, patched, from an m1n1 stage 2 (boot.bin) on that board,
+#     with the PMP started and the checks of `apple-pmp-enable verify` passing.
+# The patched digest is `pmp-dtb digest` of the patched tree (layout
+# independent); the patched sha256 of each is in docs/pmp-enable.md.
+#
+# board       kernel the tree comes from                   stock sha256                                                      patched digest                                                    machine
+t6000-j314s   7.3.4-900.asahiwip.plus5.fc44.aarch64+16k   0d9caf93c1bdff3ffa93aee094ad794bf8d77694dec1fb08fa2f110f7139a1b5  6f1f6eb4791e367d08b159bcaf66316074b95308f38d02e2bbaa9b294dc218a1  M1 Pro 14-inch MacBook Pro (2021)
+t6001-j314c   7.3.4-900.asahiwip.plus5.fc44.aarch64+16k   4662c27d3122ca5470fc06798d6c6da5dbf8b01ef9c79adb59ff65ca99062bb9  c1bb10bab4bdf3dd20a7c9875e50929c30cfd9cc0fbfff73aba2f6d6e54a9995  M1 Max 14-inch MacBook Pro (2021)
+#
+# Pass `check` on 7.3.4 plus5 but never booted with the PMP (not listed):
+#   t6000-j316s, t6001-j316c (16-inch MacBook Pro), t6001-j375c (Mac Studio).
+# Not supported: t6002 (M1 Ultra: its flag build does not compile in 7.3.4,
+# and die 1 has no report entries for the encoders), t8112 (M2: the PMP
+# firmware crashes unless the neural engine stays powered, and 7.3.4 moves
+# the MSR scaler, which `check` does not yet cover there), t8103 (M1: older
+# PMP, no Linux support), t602x and later (untested).

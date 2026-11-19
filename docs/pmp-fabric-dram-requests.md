@@ -187,9 +187,10 @@ on the 7.3.1 `plus3` base (PR #18 comments):
 - Only the first video encoder (AVE0) has a node; other agents (decoder,
   ISP, display, neural engine) are not described yet.
 - CPU hotplug paths are compile-tested only.
-- The PMP device trees themselves are not part of this project
-  ([consolidation-plan.md](consolidation-plan.md), "Keep out"): without
-  them, none of this does anything.
+- Without a PMP-enabled device tree in m1n1's stage 2 none of this does
+  anything, and Fedora's trees are built without it. `apple-pmp-enable`
+  ([pmp-enable.md](pmp-enable.md)) makes one, opt-in, for the validated
+  M1 Pro/Max laptops.
 
 ## Hardware
 

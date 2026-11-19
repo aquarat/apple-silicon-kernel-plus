@@ -160,6 +160,15 @@ is in this repository's history (`scripts/make-srpm.sh`, before
 an `@asahi` release (`40x.asahi`) sorts below `900.asahiwip`, so either
 wait for a newer Linux version or give the rebuild a release above 900.
 
+### apple-pmp-enable after a kernel move
+
+`packages/apple-pmp-enable/validated.txt` lists device trees by hash, so
+a new kernel's trees are refused until they are validated: the `check`
+against a flag build, a trial boot on each board, then a new row and test
+tree ([pmp-enable.md](pmp-enable.md#adding-a-kernel-or-a-board-maintainers)).
+Until then users keep the PMP off after the kernel update (it switches off
+by itself when `update-m1n1` writes the new kernel's stock trees).
+
 ## Rebasing apple-avd
 
 Needed when this project's kernel moves to a new kernel series (DKMS then
@@ -265,7 +274,7 @@ pair (`GPU_BACKEND_BIN`, see packages/qemu-vmapple/README.md).
 ## COPR
 
 `scripts/copr-setup.sh` (once) creates the project with the
-`fedora-44-aarch64` chroot and eight SCM packages using the `make_srpm`
+`fedora-44-aarch64` chroot and nine SCM packages using the `make_srpm`
 method. The SRPM step has network access in COPR; the RPM builds do not
 need it, so "enable internet" stays off.
 
