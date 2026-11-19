@@ -55,6 +55,14 @@ exit 0
 cat "$FAKE/journal" 2>/dev/null
 exit 0
 """,
+    # Writes to the fake ESP fail while $FAKE/esp-read-only exists (permission
+    # bits would not stop the tests when they run as root).
+    "cp": r"""#!/bin/bash
+if [ -e "$FAKE/esp-read-only" ]; then
+    for a in "$@"; do case $a in "$FAKE"/esp/*) echo "cp: $a: Read-only file system" >&2; exit 1 ;; esac; done
+fi
+exec /usr/bin/cp "$@"
+""",
 }
 
 
@@ -321,13 +329,17 @@ class TrialTest(unittest.TestCase):
         m = self.m
         self.commit_trial()
         committed = m.read("esp/m1n1/boot.bin")
-        # force the rebuild path, and make one of update-m1n1's trees unreadable
+        # force the rebuild path, and make one of update-m1n1's trees
+        # unreadable (a directory: cat fails even as root)
         os.remove(m.path("esp/m1n1/boot.bin.pre-pmp"))
-        os.chmod(m.path("dtb/apple/t6000-j316s.dtb"), 0)
+        t = m.path("dtb/apple/t6000-j316s.dtb")
+        os.rename(t, t + ".away")
+        os.mkdir(t)
         try:
             r = m.run("disable")
         finally:
-            os.chmod(m.path("dtb/apple/t6000-j316s.dtb"), 0o644)
+            os.rmdir(t)
+            os.rename(t + ".away", t)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("left as it is", r.stderr)
         self.assertEqual(m.read("esp/m1n1/boot.bin"), committed)
@@ -354,11 +366,11 @@ class TrialTest(unittest.TestCase):
         # cannot be written
         m.new_boot(2, trial=True, pmp_dt=True)
         m.new_boot(3, trial=False, pmp_dt=True)
-        os.chmod(m.path("esp/m1n1"), 0o555)
+        m.write("esp-read-only", "")
         try:
             self.ok(m.run("boot"))
         finally:
-            os.chmod(m.path("esp/m1n1"), 0o755)
+            os.remove(m.path("esp-read-only"))
         self.assertEqual(m.read("esp/m1n1/boot.bin"), cand)
         self.assertEqual(m.state()["phase"], "armed")
         self.assertIn("module_blacklist=pmp", m.options())
@@ -378,11 +390,11 @@ class TrialTest(unittest.TestCase):
         # pretend the early restore did not stick, and the ESP is read-only now
         m.write("esp/m1n1/boot.bin", m.read("state/boot.bin.pmp"))
         m.new_boot(3, trial=False, pmp_dt=True)
-        os.chmod(m.path("esp/m1n1"), 0o555)
+        m.write("esp-read-only", "")
         try:
             self.ok(m.run("boot"))
         finally:
-            os.chmod(m.path("esp/m1n1"), 0o755)
+            os.remove(m.path("esp-read-only"))
         self.assertEqual(m.state()["phase"], "trial")
         self.assertIn("module_blacklist=pmp", m.options())
         m.new_boot(4, trial=False, pmp_dt=True)
