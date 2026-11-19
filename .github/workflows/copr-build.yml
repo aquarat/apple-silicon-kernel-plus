@@ -67,12 +67,16 @@ jobs:
           printf '%s\n' "$COPR_CONFIG" > "$HOME/.config/copr"
       - name: Start the build(s)
         id: sync
+        shell: bash
         env:
           PACKAGE: ${{ inputs.package || 'missing' }}
         run: |
+          set -euo pipefail
           case $PACKAGE in
           missing)
-            scripts/copr-sync.py --build | tee -a "$GITHUB_OUTPUT"
+            # The status lines stay in the log; only the key=value lines are outputs.
+            scripts/copr-sync.py --build | tee "$RUNNER_TEMP/copr-sync.log"
+            grep -E '^(missing|failed|started)=' "$RUNNER_TEMP/copr-sync.log" >> "$GITHUB_OUTPUT"
             ;;
           *)
             if [ "$PACKAGE" = all ]; then
