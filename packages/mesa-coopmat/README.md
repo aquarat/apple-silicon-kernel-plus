@@ -8,9 +8,9 @@ asked to.
 
 | path | what |
 |---|---|
-| `/usr/lib64/apple-silicon-kernel-plus/mesa-coopmat/26.3.0-devel-20e478a1ab11/lib/libvulkan_asahi.so` | the driver |
-| `.../26.3.0-devel-20e478a1ab11/share/vulkan/icd.d/asahi_icd.aarch64.json` | its ICD file, outside `/usr/share/vulkan/icd.d` |
-| `.../26.3.0-devel-20e478a1ab11/PROVENANCE` | source commit, tree, upstream base, driver SHA256 |
+| `/usr/lib64/apple-silicon-kernel-plus/mesa-coopmat/27.0.0-devel-5956a5be4777/lib/libvulkan_asahi.so` | the driver |
+| `.../27.0.0-devel-5956a5be4777/share/vulkan/icd.d/asahi_icd.aarch64.json` | its ICD file, outside `/usr/share/vulkan/icd.d` |
+| `.../27.0.0-devel-5956a5be4777/PROVENANCE` | source commit, tree, upstream base, driver SHA256 |
 | `/usr/lib64/apple-silicon-kernel-plus/mesa-coopmat/bin/with-coopmat` | runs a command with this driver |
 
 The versioned directory changes with each source pin; the wrapper path
@@ -40,14 +40,21 @@ is a ggml setting, not part of the driver; set it in the job if you need it.
 
 ## Source
 
-github.com/aquarat/mesa, branch `coopmat`, pinned in the spec:
+github.com/aquarat/mesa, branch `coopmat-27`, pinned in the spec:
 
 | | |
 |---|---|
-| commit | `20e478a1ab11f06d388c29fdbffbab85f349ccdd` (2026-11-17) |
-| tree | `515e3eeabb5e013d5cd74a438b5ced319321331a` |
-| upstream base | Mesa main `063a4640270ba4e1cf9ca7e916fcc090ab24c3a4` (2026-08-26, `26.3.0-devel`) |
-| on top | 39 commits: Honeykrisp compute overlap, GPU timing/profiling (`HK_PERFTEST`), scratch and spill fixes, tessellation, `VK_EXT_fragment_shader_interlock`; then `d105715` (review fixes), `77e6f99` (prototype `VK_KHR_cooperative_matrix` on the SIMD-group matrix FMA), `7dd673b` (native mixed f16 x f16 + f32 FMA), `71969e3` (register allocation fix for `simd_matrix_fmadd`); then 3 AGX compiler fixes cherry-picked (`-x`) from later Mesa main, all three backported upstream to mesa-26.2.7 (`bbeb2dca` already in 26.2.6): `bebbaf49` (phi register shuffling order, MR 44475), `bbeb2dca` (mask the shift count of `bitfield_extract` and the fused shift ops, MR 44700), `b47973d0` (signext optimisation with `abs`, MR 45571) |
+| commit | `5956a5be4777994ff25cee9c5f85485eee460df2` (2026-11-19) |
+| tree | `a617ac5972a62a1d7ffd946ec1933703b5547584` |
+| upstream base | Mesa main `23732583a81cf342daa311e46afcf6d05012fae1` (2026-11-19, `27.0.0-devel`) |
+| on top | 42 commits: Honeykrisp compute overlap and the light in-stream barrier for buffer-only compute dependencies, GPU timing/profiling (`HK_GPUTIME`, `HK_PERFTEST`), shader-cache key and bounds-check fixes, scratch and spill fixes, tessellation, `VK_EXT_fragment_shader_interlock`, the prototype `VK_KHR_cooperative_matrix` on the SIMD-group matrix FMA with native mixed f16 x f16 + f32 FMA, and a register allocation fix for `simd_matrix_fmadd`. The fork's README (its landing page) describes them commit by commit. |
+
+`coopmat-27` is the previous pin's branch `coopmat` rebased onto Mesa main.
+The three AGX compiler fixes that the previous pin `20e478a1ab11`
+cherry-picked (`bebbaf49`, `bbeb2dca`, `b47973d0`) are upstream now and were
+dropped. Every other commit applied unchanged, apart from a one-line
+argument change in KosmicKrisp's `kk_shader.c`. The branch `coopmat` stays at
+the previous pin as a reference.
 
 `scripts/make-srpm.sh mesa-coopmat` fetches only that commit (shallow) and
 refuses it unless its tree id and `VERSION` match the spec, so the SRPM's
@@ -57,14 +64,15 @@ LLVM on.
 
 ## Version drift
 
-The branch is a Mesa main snapshot, not Fedora's Mesa (26.2.x for Fedora
+The branch is a Mesa main snapshot (27.0.0-devel), not Fedora's Mesa (26.2.x for Fedora
 44). The Asahi DRM uAPI header is the same in this tree, in Fedora 44's Mesa
 and in this project's 7.2 kernel and in Fedora Asahi Remix's 7.1 kernel, so
-it runs on both. Moving the 39 commits onto a 26.2 release is not a
+it runs on both. Moving the 42 commits onto a 26.2 release is not a
 mechanical rebase (the compute and compiler changes depend on main); bump
-the pin instead when the branch moves:
+the pin instead when the branch moves, or rebase the series onto newer Mesa
+main on a new branch (as `coopmat-27` was):
 
-1. `git ls-remote https://github.com/aquarat/mesa.git refs/heads/coopmat`
+1. `git ls-remote https://github.com/aquarat/mesa.git refs/heads/coopmat-27`
 2. In the spec: `mesa_commit`, `mesa_tree` (`git rev-parse <commit>^{tree}`),
    `mesa_date`, `mesa_version` (the tree's `VERSION`), `mesa_base` and the
    `Version` tag; `Release: 1`; changelog.
@@ -77,37 +85,49 @@ the pin instead when the branch moves:
 
 ## Status
 
-Experimental. In daily use on M1 Max (t6001) and M1 Pro (t6000) for ggml
-compute: llama.cpp, stable-diffusion.cpp and CLIP image embeddings.
+Experimental. The previous pin `20e478a1ab11` is in daily use on M1 Max
+(t6001) and M1 Pro (t6000) for ggml compute: llama.cpp,
+stable-diffusion.cpp and CLIP image embeddings. This pin, `5956a5be4777`,
+has passed the checks below but has not been deployed yet.
 `VK_KHR_cooperative_matrix` here is a prototype from a personal branch, not
 upstream Mesa. Report problems to this project, not to Mesa.
 
-Compared with the system Mesa on the same machine:
+Compared with the system Mesa on the same machine (M1 Max, Qwen3.6-35B-A3B
+UD-Q5_K_XL, `llama-bench -fa 1`):
 
-- Faster prompt processing: a 24B Q6_K perplexity run took 3.5 instead of
-  4.7 minutes.
-- Perplexity within noise (ratio 1.0005 ± 0.0010) and mean KL divergence
-  0.003 against the system driver's logits.
-- CLIP embeddings are bit-identical between builds of this commit.
+- Prompt processing (pp512): 271.2 against 217.6 tokens/s (+25 %), the
+  same as `20e478a1ab11` (271.0).
+- Decode (tg128): 30.18 against 25.45 tokens/s (+19 %). `20e478a1ab11` did
+  29.71; the gain comes from the light dependency barrier.
+- Earlier pins: perplexity within noise of the system driver (ratio
+  1.0005 ± 0.0010), mean KL divergence 0.003.
 
-**Correctness (pin `20e478a1ab11`, M1 Max, 2026-11-17).** ggml's
-`test-backend-ops` against the CPU backend passes 8848 of 8848 cases over
-18 operations (flash attention, `MUL_MAT_ID`, `GET_ROWS`, `SET_ROWS`, `CPY`,
-`ROPE`, `SOFT_MAX`, norms, SSM and delta-net ops), plus all 2592 `MUL_MAT`
-and 136 GLU cases, the same as the system Mesa 26.2.6. Logits of a 24B
-Q6_K model are unchanged from the first pin: mean KL divergence 0.0028
-against the system driver, same top token 97.1%, perplexity ratio
-1.0005 ± 0.0010.
+**Correctness (pin `5956a5be4777`, 2026-11-19).**
 
-The first pin, `71969e3`, failed 682 of those 8848 cases:
+- ggml's `test-backend-ops` against the CPU backend (llama.cpp of
+  2026-11-19), full suite: 23,116/23,116 with the RPM's driver. One run of a
+  local build of the same commit failed one `SET_ROWS f32 -> q2_0` case.
+  That case fails intermittently on every driver, including `20e478a1ab11`
+  and upstream Mesa (1-2 runs in 100), because the test draws new random
+  inputs and the CPU and GPU can round a tie differently.
+- The 29-operation sweep (12,418 cases): all pass.
+- Against `20e478a1ab11`: logits of Qwen3.6-35B-A3B differ only at rounding
+  level (mean KL divergence about 0, same top token 100 % in prefill- and
+  decode-shaped runs), and greedy text is identical.
+- dEQP-VK 1.4.7.1 `compute.pipeline.*` (22,533 cases, including 17,924
+  cooperative-matrix cases): no failures and no new ones against upstream
+  Mesa main; the cooperative-matrix results are identical to
+  `20e478a1ab11`.
+
+The first pin, `71969e3`, failed 682 of 8848 cases of the 18-operation
+sweep:
 
 - `FLASH_ATTN_EXT` with a `q5_0`/`q5_1` K/V cache (674 cases);
 - `GET_ROWS` on `iq3_s` (8 cases).
 
 Both groups unpack bit fields at variable offsets. `71969e3`'s Mesa base
 predates upstream `bbeb2dca` (AGX shifts do not mask the shift count, so
-NIR's `bitfield_extract` and fused-shift patterns could read the wrong bits),
-which this pin cherry-picks with two other compiler fixes; all 682 cases
-pass on this pin. A q5 KV cache and
-IQ3_S models are therefore fine on `20e478a1ab11` and later, but not on a
-host still running `71969e3`.
+NIR's `bitfield_extract` and fused-shift patterns could read the wrong
+bits). `20e478a1ab11` cherry-picked it, and this pin's base contains it. A
+q5 KV cache and IQ3_S models are fine on `20e478a1ab11` and later, but not
+on a host still running `71969e3`.
