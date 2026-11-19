@@ -293,7 +293,10 @@ is now `video-codec@`).
   dry run change nothing; enable stages exactly the steps above; the trial
   boot restores `boot.bin`; commit with passing and failing checks; the
   dead-man; a trial boot that never reached user space; abort before and
-  on the trial boot; disable; and the refusals.
+  on the trial boot; disable (also: it never writes an image it could not
+  assemble or that lacks the board's stock tree); a `boot.bin` restore that
+  fails on the ESP keeps `module_blacklist=pmp` and retries at the next
+  boot; and the refusals.
 - The package's `%check` runs both; CI runs them, shellcheck and rpmlint.
 - On hardware: the package itself has not run `enable` on a machine. The
   patched trees are byte-identical to the two that booted, and the trial

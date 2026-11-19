@@ -309,6 +309,88 @@ class TrialTest(unittest.TestCase):
         r = self.ok(m.run("disable"))
         self.assertIn("nothing to do", r.stdout)
 
+    def commit_trial(self):
+        m = self.m
+        self.enable()
+        m.new_boot(2, trial=True, pmp_dt=True)
+        self.ok(m.run("boot"))
+        self.ok(m.run("commit"))
+        m.new_boot(3, trial=False, pmp_dt=True)
+
+    def test_disable_never_writes_a_broken_image(self):
+        m = self.m
+        self.commit_trial()
+        committed = m.read("esp/m1n1/boot.bin")
+        # force the rebuild path, and make one of update-m1n1's trees unreadable
+        os.remove(m.path("esp/m1n1/boot.bin.pre-pmp"))
+        os.chmod(m.path("dtb/apple/t6000-j316s.dtb"), 0)
+        try:
+            r = m.run("disable")
+        finally:
+            os.chmod(m.path("dtb/apple/t6000-j316s.dtb"), 0o644)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("left as it is", r.stderr)
+        self.assertEqual(m.read("esp/m1n1/boot.bin"), committed)
+        # without this board's tree among update-m1n1's inputs
+        os.remove(m.path("dtb/apple/t6001-j314c.dtb"))
+        r = m.run("disable")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("has no stock t6001-j314c tree", r.stderr)
+        self.assertEqual(m.read("esp/m1n1/boot.bin"), committed)
+
+    def test_disable_rebuilds_when_the_backup_is_gone(self):
+        m = self.m
+        self.commit_trial()
+        os.remove(m.path("esp/m1n1/boot.bin.pre-pmp"))
+        r = self.ok(m.run("disable"))
+        self.assertIn("stock device trees", r.stdout)
+        self.assertEqual(m.read("esp/m1n1/boot.bin"), m.before)
+
+    def test_failed_restore_keeps_the_fallback(self):
+        m = self.m
+        self.enable()
+        cand = m.read("esp/m1n1/boot.bin")
+        # the trial boot died before user space; on the normal boot the ESP
+        # cannot be written
+        m.new_boot(2, trial=True, pmp_dt=True)
+        m.new_boot(3, trial=False, pmp_dt=True)
+        os.chmod(m.path("esp/m1n1"), 0o555)
+        try:
+            self.ok(m.run("boot"))
+        finally:
+            os.chmod(m.path("esp/m1n1"), 0o755)
+        self.assertEqual(m.read("esp/m1n1/boot.bin"), cand)
+        self.assertEqual(m.state()["phase"], "armed")
+        self.assertIn("module_blacklist=pmp", m.options())
+        self.assertNotIn("disable apple-pmp-trial.service", m.read("calls.log", True))
+        # the next boot can write it: everything is undone
+        m.new_boot(4, trial=False, pmp_dt=True)
+        self.ok(m.run("boot"))
+        self.assertEqual(m.state()["phase"], "failed")
+        self.assertEqual(m.read("esp/m1n1/boot.bin"), m.before)
+        self.assert_cleaned()
+
+    def test_failed_restore_after_an_uncommitted_trial(self):
+        m = self.m
+        self.enable()
+        m.new_boot(2, trial=True, pmp_dt=True)
+        self.ok(m.run("boot"))
+        # pretend the early restore did not stick, and the ESP is read-only now
+        m.write("esp/m1n1/boot.bin", m.read("state/boot.bin.pmp"))
+        m.new_boot(3, trial=False, pmp_dt=True)
+        os.chmod(m.path("esp/m1n1"), 0o555)
+        try:
+            self.ok(m.run("boot"))
+        finally:
+            os.chmod(m.path("esp/m1n1"), 0o755)
+        self.assertEqual(m.state()["phase"], "trial")
+        self.assertIn("module_blacklist=pmp", m.options())
+        m.new_boot(4, trial=False, pmp_dt=True)
+        self.ok(m.run("boot"))
+        self.assertEqual(m.state()["phase"], "reverted")
+        self.assertEqual(m.read("esp/m1n1/boot.bin"), m.before)
+        self.assert_cleaned()
+
     def test_commit_refused_when_the_pmp_did_not_start(self):
         m = self.m
         self.enable()

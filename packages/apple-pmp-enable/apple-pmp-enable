@@ -216,7 +216,7 @@ prepare() {
     say "device tree $b: validated ($ROW)"
 
     BEFORE=$(esp_dir)/boot.bin
-    assemble "$WORK/rebuilt.bin" "${DTB_LIST[@]}"
+    assemble "$WORK/rebuilt.bin" "${DTB_LIST[@]}" || die "cannot assemble boot.bin from $SYSCONFIG's inputs"
     if ! cmp -s "$WORK/rebuilt.bin" "$BEFORE"; then
         die "$BEFORE ($(short "$(sum "$BEFORE")")...) is not what update-m1n1 would write now from $SYSCONFIG.
   The trial must change only the PMP. Run update-m1n1, restart, check that the
@@ -228,7 +228,7 @@ prepare() {
         if [ "${DTB_LIST[$i]}" = "$b" ]; then patched+=("$WORK/$BOARD.dtb"); else patched+=("${DTB_LIST[$i]}"); fi
     done
     CANDIDATE=$WORK/boot-pmp.bin
-    assemble "$CANDIDATE" "${patched[@]}"
+    assemble "$CANDIDATE" "${patched[@]}" || die "cannot assemble the candidate boot.bin"
     say "candidate boot.bin $(short "$(sum "$CANDIDATE")")...: only $BOARD.dtb differs"
     local free need
     free=$(df --output=avail -B1 "$ESP_MOUNT" | tail -1)
@@ -399,9 +399,15 @@ EOF
        ! grub2-editenv - set "next_entry=$id"; then
         say "setting up the trial failed; undoing"
         [ -z "$(st entry)" ] && st_set "entry=$(cat "$MACHINE_ID_FILE")-$KREL-pmptrial"
-        restore_before || say "could not restore $esp/boot.bin: copy $esp/boot.bin.pre-pmp over it before restarting"
-        remove_trial_bits
-        st_set phase=failed "note=setting up the trial failed; nothing is staged"
+        if restore_before; then
+            remove_trial_bits
+            st_set phase=failed "note=setting up the trial failed; nothing is staged"
+        else
+            # Keep module_blacklist=pmp and let the next boot try again.
+            systemctl enable apple-pmp-trial.service >/dev/null 2>&1 || :
+            st_set phase=arming "note=setting up the trial failed and boot.bin could not be put back"
+            say "could NOT put $esp/boot.bin back: copy $esp/boot.bin.pre-pmp over it before restarting"
+        fi
         exit 1
     fi
     st_set phase=armed
@@ -437,18 +443,26 @@ cmd_boot() {
         else
             # Armed, but this is not the trial boot: it never got this far
             # (or another entry was chosen). Its entries blacklist pmp, so
-            # the PMP did not start; undo everything.
-            restore_before || logk "could NOT put $esp/boot.bin back; see PMP-RECOVERY.txt"
-            remove_trial_bits early
-            st_set phase=failed "note=the trial boot did not reach early user space (or another boot entry was used); reverted"
-            logk "PMP trial: the trial boot never reached early user space; boot.bin and boot entries reverted"
+            # the PMP did not start; undo everything, once boot.bin is back.
+            if restore_before; then
+                remove_trial_bits early
+                st_set phase=failed "note=the trial boot did not reach early user space (or another boot entry was used); reverted"
+                logk "PMP trial: the trial boot never reached early user space; boot.bin and boot entries reverted"
+            else
+                st_set "note=could not put boot.bin back; module_blacklist=pmp kept, retrying at the next boot"
+                logk "could NOT put $esp/boot.bin back (module_blacklist=pmp kept; retrying at the next boot); see PMP-RECOVERY.txt"
+            fi
         fi ;;
     trial)
         [ "$(st boot_id)" = "$cur" ] && exit 0
-        restore_before || logk "could NOT put $esp/boot.bin back; see PMP-RECOVERY.txt"
-        remove_trial_bits early
-        st_set phase=reverted "note=the trial boot ended without a commit; reverted"
-        logk "PMP trial ended without a commit: reverted to the previous boot.bin and boot entries" ;;
+        if restore_before; then
+            remove_trial_bits early
+            st_set phase=reverted "note=the trial boot ended without a commit; reverted"
+            logk "PMP trial ended without a commit: reverted to the previous boot.bin and boot entries"
+        else
+            st_set "note=could not put boot.bin back; module_blacklist=pmp kept, retrying at the next boot"
+            logk "could NOT put $esp/boot.bin back (module_blacklist=pmp kept; retrying at the next boot); see PMP-RECOVERY.txt"
+        fi ;;
     esac
     exit 0
 }
@@ -555,8 +569,12 @@ cmd_disable() {
         # shellcheck disable=SC2064
         trap "rm -rf '$w'" EXIT
         read_m1n1_config
-        assemble "$w/boot.bin" "${DTB_LIST[@]}"
-        cp "$esp/boot.bin" "$esp/boot.bin.old"
+        assemble "$w/boot.bin" "${DTB_LIST[@]}" || die "cannot assemble boot.bin from $SYSCONFIG's inputs; $esp/boot.bin left as it is"
+        # Never write an image that does not hold this board's stock tree.
+        "$PMPDTB" bootbin --m1n1 "$M1N1" "$w/boot.bin" 2>/dev/null |
+            awk -v b="$b" '$1 == b && $3 == "-" { f = 1 } END { exit !f }' ||
+            die "the rebuilt boot.bin has no stock $b tree; $esp/boot.bin left as it is"
+        cp "$esp/boot.bin" "$esp/boot.bin.old" || die "cannot save $esp/boot.bin.old"
         esp_write "$w/boot.bin" "$esp/boot.bin" || die "writing $esp/boot.bin failed"
         say "wrote boot.bin with the stock device trees (the PMP one is boot.bin.old)"
     fi
