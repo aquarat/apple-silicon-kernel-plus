@@ -95,7 +95,8 @@ jobs:
         if: steps.sync.outputs.failed != ''
         env:
           FAILED: ${{ steps.sync.outputs.failed }}
-        run: echo "::warning::COPR build of the current spec failed, not retried (re-run by hand with the package name): $FAILED"
+        run: |
+          echo "::warning::COPR build of the current spec failed, not retried (re-run by hand with the package name): $FAILED"
       - name: Remove the config
         if: always()
         run: rm -f "$HOME/.config/copr"
