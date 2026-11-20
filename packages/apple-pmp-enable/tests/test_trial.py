@@ -64,6 +64,19 @@ if [ -e "$FAKE/esp-read-only" ]; then
 fi
 exec /usr/bin/cp "$@"
 """,
+    # Writing the state file fails while $FAKE/state-fail exists: always if it
+    # is empty, else only when the new state has a line it names (e.g.
+    # "phase=trial"), like a full /var at that moment.
+    "mv": r"""#!/bin/bash
+dst=${*: -1}; src=${*: -2:1}
+if [ -e "$FAKE/state-fail" ] && [ "$dst" = "$FAKE/state/state" ]; then
+    want=$(cat "$FAKE/state-fail")
+    if [ -z "$want" ] || grep -qxF "$want" "$src"; then
+        echo "mv: cannot move '$src': No space left on device" >&2; exit 1
+    fi
+fi
+exec /usr/bin/mv "$@"
+""",
 }
 
 
@@ -543,6 +556,75 @@ class TrialTest(unittest.TestCase):
         self.enable()
         self.assertEqual(m.read("esp/m1n1/boot.bin.pre-pmp"), m.before)
         self.assertEqual(self.bak_names(), [])
+
+    def test_trial_state_not_written_the_deadman_still_restarts(self):
+        m = self.m
+        self.enable()
+        m.new_boot(2, trial=True, pmp_dt=True)
+        m.write("state-fail", "phase=trial")
+        try:
+            r = self.ok(m.run("boot"))
+            self.assertEqual(m.state()["phase"], "armed")
+            self.assertEqual(m.read("esp/m1n1/boot.bin"), m.before)
+            self.assertIn("could NOT write", r.stdout)
+            # commit refuses: the state does not say this is the trial boot
+            self.assertNotEqual(m.run("commit").returncode, 0)
+            self.ok(m.run("deadman"))
+            self.assertIn("systemctl reboot", m.read("calls.log", True))
+        finally:
+            os.remove(m.path("state-fail"))
+        # the next (normal) boot reverts everything
+        m.new_boot(3, trial=False, pmp_dt=False)
+        self.ok(m.run("boot"))
+        self.assertEqual(m.state()["phase"], "failed")
+        self.assert_cleaned()
+
+    def test_deadman_leaves_other_boots_alone(self):
+        m = self.m
+        self.enable()
+        self.ok(m.run("deadman"))   # armed, not the trial boot
+        m.new_boot(2, trial=True, pmp_dt=True)
+        self.ok(m.run("boot"))
+        self.ok(m.run("abort"))
+        self.ok(m.run("deadman"))   # aborted on the trial boot
+        self.assertNotIn("systemctl reboot", m.read("calls.log", True))
+
+    def test_enable_stops_when_the_state_cannot_be_written(self):
+        m = self.m
+        m.write("state-fail", "")
+        try:
+            r = m.run("enable")
+        finally:
+            os.remove(m.path("state-fail"))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("nothing is staged", r.stdout + r.stderr)
+        self.assert_untouched()
+
+    def test_enable_undoes_itself_when_armed_cannot_be_recorded(self):
+        m = self.m
+        m.write("state-fail", "phase=armed")
+        try:
+            r = m.run("enable")
+        finally:
+            os.remove(m.path("state-fail"))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(m.state()["phase"], "failed")
+        self.assert_untouched()
+
+    def test_commit_reports_a_state_write_failure(self):
+        m = self.m
+        self.enable()
+        cand = m.read("esp/m1n1/boot.bin")
+        m.new_boot(2, trial=True, pmp_dt=True)
+        self.ok(m.run("boot"))
+        m.write("state-fail", "phase=committed")
+        try:
+            r = m.run("commit")
+        finally:
+            os.remove(m.path("state-fail"))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("could not be", r.stdout + r.stderr)
+        self.assertEqual(m.read("esp/m1n1/boot.bin"), cand)
 
     def test_deadman_option(self):
         m = self.m

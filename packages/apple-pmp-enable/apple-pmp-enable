@@ -72,16 +72,24 @@ need_root() { [ "$(id -u)" = 0 ] || [ -n "${APPLE_PMP_TEST:-}" ] || die "run as 
 
 # ---- state file: key=value lines -------------------------------------------
 st() { [ -f "$STATE" ] && sed -n "s/^$1=//p" "$STATE" | tail -1; }
+# Non-zero if the new state could not be written (the old file is then kept).
 st_set() {
-    local k v kv tmp
-    mkdir -p "$STATE_DIR"
-    tmp=$(mktemp "$STATE_DIR/.state.XXXXXX")
-    [ -f "$STATE" ] && grep -v -E "^($(printf '%s|' "${@%%=*}" | sed 's/|$//'))=" "$STATE" > "$tmp"
-    for kv in "$@"; do k=${kv%%=*}; v=${kv#*=}; printf '%s=%s\n' "$k" "$v" >> "$tmp"; done
+    local k v kv tmp rc=0
+    mkdir -p "$STATE_DIR" && tmp=$(mktemp "$STATE_DIR/.state.XXXXXX") || return 1
+    if [ -f "$STATE" ]; then
+        grep -v -E "^($(printf '%s|' "${@%%=*}" | sed 's/|$//'))=" "$STATE" > "$tmp" || rc=$?
+        [ $rc -le 1 ] || { rm -f "$tmp"; return 1; }   # 1: no lines left, fine
+    fi
+    for kv in "$@"; do
+        k=${kv%%=*}; v=${kv#*=}
+        printf '%s=%s\n' "$k" "$v" >> "$tmp" || { rm -f "$tmp"; return 1; }
+    done
     sync "$tmp" 2>/dev/null || :
-    mv -f "$tmp" "$STATE"
+    mv -f "$tmp" "$STATE" || { rm -f "$tmp"; return 1; }
     sync "$STATE_DIR" 2>/dev/null || :
 }
+# st_set during early boot: log a failure, carry on.
+st_log() { st_set "$@" || logk "could NOT write $STATE (wanted: $*)"; }
 phase() { st phase; }
 
 # ---- the machine ------------------------------------------------------------
@@ -429,12 +437,14 @@ EOF
     esp_write "$BEFORE" "$esp/boot.bin.pre-pmp" || die "cannot save $esp/boot.bin.pre-pmp"
     recovery_note > "$esp/PMP-RECOVERY.txt.new" && mv -f "$esp/PMP-RECOVERY.txt.new" "$esp/PMP-RECOVERY.txt"
     st_set phase=arming "date=$(date -u +%FT%TZ)" "kernel=$KREL" "board=$BOARD" "esp_dir=$esp" \
-        "before_sha=$before_sha" "candidate_sha=$cand_sha" added_blacklist=yes entry= boot_id= note=
+        "before_sha=$before_sha" "candidate_sha=$cand_sha" added_blacklist=yes entry= boot_id= note= ||
+        die "cannot write $STATE; nothing is staged"
 
     if ! id=$(install_trial_bits "$src" "$min") || [ -z "$id" ] ||
        ! st_set "entry=$id" ||
        ! esp_write "$STATE_DIR/boot.bin.pmp" "$esp/boot.bin" ||
-       ! grub2-editenv - set "next_entry=$id"; then
+       ! grub2-editenv - set "next_entry=$id" ||
+       ! st_set phase=armed; then
         say "setting up the trial failed; undoing"
         [ -z "$(st entry)" ] && st_set "entry=$(cat "$MACHINE_ID_FILE")-$KREL-pmptrial"
         if restore_before; then
@@ -448,7 +458,6 @@ EOF
         fi
         exit 1
     fi
-    st_set phase=armed
     logk "trial staged: next boot uses the PMP boot.bin $(short "$cand_sha")... once (entry $id); saved $(short "$before_sha")... as boot.bin.pre-pmp"
     cat <<EOF
 
@@ -472,10 +481,12 @@ cmd_boot() {
     armed|arming)
         if [ "$p" = armed ] && grep -qw "$TRIAL_FLAG" "$CMDLINE"; then
             if restore_before; then
-                st_set phase=trial "boot_id=$cur" "note=trial boot; boot.bin put back"
+                # If this fails the dead-man still restarts the trial boot:
+                # it also goes by the trial entry's command line.
+                st_log phase=trial "boot_id=$cur" "note=trial boot; boot.bin put back"
                 logk "PMP trial boot: the device tree has the PMP for this boot only; boot.bin is back to $(short "$(st before_sha)")... Run 'apple-pmp-enable commit' to keep it."
             else
-                st_set phase=trial "boot_id=$cur" "note=trial boot; putting boot.bin back FAILED"
+                st_log phase=trial "boot_id=$cur" "note=trial boot; putting boot.bin back FAILED"
                 logk "PMP trial boot: could NOT put $esp/boot.bin back; see PMP-RECOVERY.txt"
             fi
         else
@@ -484,10 +495,10 @@ cmd_boot() {
             # the PMP did not start; undo everything, once boot.bin is back.
             if restore_before; then
                 remove_trial_bits early
-                st_set phase=failed "note=the trial boot did not reach early user space (or another boot entry was used); reverted"
+                st_log phase=failed "note=the trial boot did not reach early user space (or another boot entry was used); reverted"
                 logk "PMP trial: the trial boot never reached early user space; boot.bin and boot entries reverted"
             else
-                st_set "note=could not put boot.bin back; module_blacklist=pmp kept, retrying at the next boot"
+                st_log "note=could not put boot.bin back; module_blacklist=pmp kept, retrying at the next boot"
                 logk "could NOT put $esp/boot.bin back (module_blacklist=pmp kept; retrying at the next boot); see PMP-RECOVERY.txt"
             fi
         fi ;;
@@ -495,18 +506,26 @@ cmd_boot() {
         [ "$(st boot_id)" = "$cur" ] && exit 0
         if restore_before; then
             remove_trial_bits early
-            st_set phase=reverted "note=the trial boot ended without a commit; reverted"
+            st_log phase=reverted "note=the trial boot ended without a commit; reverted"
             logk "PMP trial ended without a commit: reverted to the previous boot.bin and boot entries"
         else
-            st_set "note=could not put boot.bin back; module_blacklist=pmp kept, retrying at the next boot"
+            st_log "note=could not put boot.bin back; module_blacklist=pmp kept, retrying at the next boot"
             logk "could NOT put $esp/boot.bin back (module_blacklist=pmp kept; retrying at the next boot); see PMP-RECOVERY.txt"
         fi ;;
     esac
     exit 0
 }
 
+# Restart a trial boot that was not committed. The trial entry's command line
+# counts as well as the state file, in case recording phase=trial failed.
 cmd_deadman() {
-    [ "$(phase)" = trial ] && [ "$(st boot_id)" = "$(boot_id)" ] || exit 0
+    local trial_boot=0
+    grep -qw "$TRIAL_FLAG" "$CMDLINE" && trial_boot=1
+    case "$(phase)" in
+    trial) [ "$(st boot_id)" = "$(boot_id)" ] || [ $trial_boot = 1 ] || exit 0 ;;
+    arming|armed) [ $trial_boot = 1 ] || exit 0 ;;
+    *) exit 0 ;;
+    esac
     logk "PMP trial not committed in time: restarting into the previous boot.bin"
     systemctl reboot
     sleep "${APPLE_PMP_GRACE:-120}"
@@ -557,7 +576,9 @@ cmd_commit() {
         die "writing $esp/boot.bin failed; the previous boot.bin is back"
     }
     remove_trial_bits
-    st_set phase=committed "date=$(date -u +%FT%TZ)" boot_id= "note=PMP on; boot.bin $(short "$(st candidate_sha)")..."
+    st_set phase=committed "date=$(date -u +%FT%TZ)" boot_id= "note=PMP on; boot.bin $(short "$(st candidate_sha)")..." ||
+        die "committed (boot.bin has the PMP, the trial is cleaned up), but $STATE could not be
+  written, so 'status' still shows the trial. Free space under $STATE_DIR."
     logk "committed: the PMP stays on (boot.bin $(short "$(st candidate_sha)")...). The previous image stays as m1n1/boot.bin.pre-pmp."
     cat <<EOF
 A kernel or m1n1 update that runs update-m1n1 writes stock device trees again, which turns the
@@ -572,12 +593,14 @@ cmd_abort() {
     arming|armed)
         restore_before || die "could not put $(st esp_dir)/boot.bin back: copy boot.bin.pre-pmp over it"
         remove_trial_bits
-        st_set phase=aborted "date=$(date -u +%FT%TZ)" "note=aborted before the trial boot"
+        st_set phase=aborted "date=$(date -u +%FT%TZ)" "note=aborted before the trial boot" ||
+            die "aborted (boot.bin and boot entries are as before), but $STATE could not be written"
         say "aborted: boot.bin and boot entries are as before" ;;
     trial)
         restore_before || die "could not put $(st esp_dir)/boot.bin back: copy boot.bin.pre-pmp over it"
         remove_trial_bits
-        st_set phase=aborted "date=$(date -u +%FT%TZ)" "note=aborted on the trial boot"
+        st_set phase=aborted "date=$(date -u +%FT%TZ)" "note=aborted on the trial boot" ||
+            die "aborted (everything is as before from the next boot), but $STATE could not be written"
         say "aborted: this boot keeps the PMP until it ends; from the next boot everything is as before" ;;
     *) die "no trial in progress (state: $(phase))" ;;
     esac
@@ -616,7 +639,8 @@ cmd_disable() {
         esp_write "$w/boot.bin" "$esp/boot.bin" || die "writing $esp/boot.bin failed"
         say "wrote boot.bin with the stock device trees (the PMP one is boot.bin.old)"
     fi
-    st_set phase=disabled "date=$(date -u +%FT%TZ)" "note=PMP off from the next boot"
+    st_set phase=disabled "date=$(date -u +%FT%TZ)" "note=PMP off from the next boot" ||
+        die "the PMP is off from the next boot, but $STATE could not be written"
     logk "disabled: the PMP is off from the next boot"
 }
 

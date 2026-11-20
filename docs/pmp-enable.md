@@ -100,6 +100,7 @@ Then, at the next restart:
 | the trial boot reaches early user space | `apple-pmp-trial.service` (before `sysinit.target`) puts `boot.bin.pre-pmp` back at once: any later restart is back to the old state |
 | you run `commit` on it and every check passes | the PMP `boot.bin` is written again and kept; the blacklist, the trial entry, the drop-ins and the units are removed |
 | no commit within the dead-man time | the machine restarts; that boot (old `boot.bin`) removes the rest |
+| the state file under `/var/lib` cannot be written (a full `/var`) | the dead-man also goes by the trial entry's command line, so it still restarts the trial boot; `commit` refuses; `enable`, `commit`, `abort` and `disable` stop with an error rather than carry on with stale state |
 | a check fails | `commit` refuses; the dead-man or `abort` + restart go back |
 | the trial boot hangs or panics before user space | panic or watchdog restart; GRUB's one-shot is used up, so the normal entry boots (`module_blacklist=pmp`, PMP not started) and `apple-pmp-trial.service` reverts everything |
 | m1n1 itself fails on the new `boot.bin` | nothing on the machine can help: [recovery](#recovery) |
@@ -299,7 +300,9 @@ is now `video-codec@`).
   on the trial boot; disable (also: it never writes an image it could not
   assemble or that lacks the board's stock tree); a `boot.bin` restore that
   fails on the ESP keeps `module_blacklist=pmp` and retries at the next
-  boot; and the refusals.
+  boot; state-file writes that fail (the dead-man still restarts the trial
+  boot); an existing `boot.bin.pre-pmp` kept as `.bak-DATE`; and the
+  refusals.
 - The package's `%check` runs both; CI runs them, shellcheck and rpmlint.
 - On hardware: the package itself has not run `enable` on a machine. The
   patched trees are byte-identical to the two that booted, and the trial
