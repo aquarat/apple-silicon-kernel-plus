@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Enabled only while a PMP trial is set up (apple-pmp-enable enable), and
+# disabled again when it ends. On the trial boot it puts the previous
+# boot.bin back at once, so any later restart is back to normal; on the boot
+# after a trial that was not committed it undoes the trial's boot entries
+# and drop-ins.
+[Unit]
+Description=apple-pmp-enable: finish or revert a PMP trial boot
+Documentation=file:/usr/share/doc/apple-pmp-enable/README.md
+DefaultDependencies=no
+RequiresMountsFor=/boot /boot/efi /var/lib/apple-pmp-enable
+After=local-fs.target
+Before=sysinit.target shutdown.target
+Conflicts=shutdown.target
+ConditionPathExists=/var/lib/apple-pmp-enable/state
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/apple-pmp-enable boot
+
+[Install]
+WantedBy=sysinit.target

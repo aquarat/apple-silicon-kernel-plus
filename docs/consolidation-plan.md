@@ -106,6 +106,14 @@ Done, on `main` unless stated:
   the PMP firmware crashes unless the ANE stays powered (and the encoder
   gets slower). Device trees go into the boot image for every kernel, so a
   bad one cannot be undone by picking another boot entry.
+  *Revisited 2026-11-19:* the PMP patches (0030-0037) do nothing for
+  anyone without such a tree, so the project now ships an opt-in tool for
+  it, `apple-pmp-enable` ([pmp-enable.md](pmp-enable.md)), built around
+  both objections: it accepts only boards and kernel trees that have
+  booted with the PMP (two 14" laptops on 7.3.4), and it changes the boot
+  image through a self-reverting one-shot trial that is kept only after
+  its checks pass. The trees themselves are still not packaged; the tool
+  makes them from the kernel's own on the machine.
 - **VRR experiments**: written for 7.1; the 7.2 and later trees have
   their own VRR handling.
 - **GEM PRIME-import backport to 7.2**: 7.3.1 has the fix.

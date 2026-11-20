@@ -31,6 +31,7 @@ Linux or Fedora; report them here.
 | `mesa-coopmat` | Mesa's Asahi Vulkan driver from the `coopmat-27` branch of [aquarat/mesa](https://github.com/aquarat/mesa) (Mesa main + `VK_KHR_cooperative_matrix`), pinned to one commit, for GPU compute through ggml (llama.cpp, stable-diffusion.cpp). Its own versioned directory, opt-in per process with `with-coopmat <command>`; the system Mesa stays the default. [packages/mesa-coopmat](packages/mesa-coopmat) | experimental (new package) | yes, `27.0.0~devel^20261119git5956a5b-1` |
 | `qemu-vmapple` | QEMU with the `vmapple` machine for macOS guests, installed beside Fedora's qemu. Its paravirtual GPU runs out of process (`apv-gpu-proxy` forwards it to `reims-vgpu-backend`). [packages/qemu-vmapple](packages/qemu-vmapple) | experimental (in production use since 2026-10-19) | yes, `11.1.50^20261110gitacde6ba-2` |
 | `reims-vgpu-backend` | Reims, the paravirtual GPU of macOS guests, as its own program: runs the guest's Metal work on the host's Vulkan driver (with `mesa-honeykrisp-plus`), for `qemu-vmapple`. [packages/reims-vgpu-backend](packages/reims-vgpu-backend) | experimental (in production use since 2026-10-19) | yes, `0.1.0^20261110git3db7ff2-2` |
+| `apple-pmp-enable` | Opt-in: turns the PMP on for the validated M1 Pro/Max laptops by patching your board's device tree into m1n1's stage 2, through a self-reverting trial boot with a dead-man timer; refuses unvalidated boards and trees; installing it changes nothing. [packages/apple-pmp-enable](packages/apple-pmp-enable), [docs/pmp-enable.md](docs/pmp-enable.md) | **experimental** (new package) | not yet (new in this pull request) |
 
 "In COPR" is the newest successful build for `fedora-44-aarch64` when this
 README was last updated; the
@@ -119,8 +120,13 @@ copies the PMP's tunables from Apple's device tree and enables the node.
 Fedora's device trees are built without it, and `update-m1n1` writes them
 as they are. So activation means rebuilding the stage 2 with PMP-enabled
 device trees for your board, which changes your boot path: a bad image is
-recovered from macOS recovery (copy the previous `boot.bin` back). This
-repository does not yet ship a tool for that step.
+recovered from macOS recovery (copy the previous `boot.bin` back).
+[`apple-pmp-enable`](docs/pmp-enable.md) does that step, opt-in, for the
+validated laptops (14" M1 Pro and M1 Max on the 7.3.4 `plus5` kernel): it
+patches only your board's device tree, refuses any tree it was not
+validated on, and tries the result as a self-reverting one-shot boot that
+it keeps only after its boot checks pass. Read
+[its document](docs/pmp-enable.md) first, including the recovery steps.
 
 ## Benchmarks
 
@@ -181,6 +187,7 @@ As the sources state; "tested" means on at least one machine of that SoC.
 | mesa-coopmat | M1 and M2 GPUs; run on t6001 (M1 Max) |
 | qemu-vmapple | hosts that run the kernel above; macOS 13 and 26 guests used on t6001 and t6002 hosts |
 | reims-vgpu-backend | M1 and M2 GPUs, with `mesa-honeykrisp-plus`; the out-of-process GPU used with macOS 26 guests on a t6002 host |
+| apple-pmp-enable | 14" MacBook Pro with M1 Pro (t6000-j314s) or M1 Max (t6001-j314c), with this project's 7.3.4 `plus5` kernel; every other board and device tree is refused ([why](docs/pmp-enable.md#validated-boards)) |
 
 ## Kernel release naming
 

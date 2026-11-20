@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# The trial boot's dead-man: unless `apple-pmp-enable commit` ran, restart
+# the machine (into the previous boot.bin, which the trial boot has already
+# put back). Enabled only while a trial is set up; `enable --deadman MIN`
+# sets the delay in a drop-in.
+[Unit]
+Description=apple-pmp-enable: restart an uncommitted PMP trial boot
+Documentation=file:/usr/share/doc/apple-pmp-enable/README.md
+ConditionKernelCommandLine=apple_pmp_enable.trial=1
+
+[Timer]
+OnBootSec=15min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,383 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: GPL-2.0-only
+"""Device tree side of apple-pmp-enable (docs/pmp-enable.md).
+
+Turns a stock Fedora Asahi device tree blob into what the kernel would have
+built with -DAPPLE_USE_PMP, for the boards and device trees in the
+validated list only, and reads the device trees inside an m1n1 stage 2
+image (boot.bin).
+
+  pmp-dtb board [--dt /proc/device-tree]        this machine's board, e.g. t6001-j314c
+  pmp-dtb validate --validated FILE DTB         is DTB a validated stock tree? (prints its row)
+  pmp-dtb patch --validated FILE IN OUT         patch a validated tree, verify the result
+  pmp-dtb check STOCK FLAG-BUILT                maintainers: patch STOCK in memory, compare
+                                                with a -DAPPLE_USE_PMP build of the same source
+  pmp-dtb digest DTB                            maintainers: the structural digest of a tree
+  pmp-dtb bootbin [--m1n1 FILE] BOOTBIN         the trees inside BOOTBIN: board, sha256, PMP alias
+
+What -DAPPLE_USE_PMP does on t6000/t6001 (t600x-common.dtsi, t600x-die0.dtsi,
+t600x-dieX.dtsi):
+  1. it adds the alias  pmp = "/soc/pmp@..."  which is what makes m1n1's
+     dt_set_pmp() copy the PMP's tunables from Apple's device tree into the
+     node and set it "okay";
+  2. it moves the first power domain of a few devices (the display
+     controllers, the ISP, the video decoder and, from Linux 7.3.4, the MSR
+     scaler) from their PMGR power controller to the pmp_report entry that
+     sits over that controller.
+The report entries exist in the stock tree, without phandles, since nothing
+references them. Every report entry has power-domains = <&ps_X>, and the
+flag moves only the main device of that block, not its IOMMUs, mailboxes or
+the boot framebuffer, which share &ps_X. So this script takes the entries
+that a MOVED device sits under, gives each a fresh phandle, and rewrites cell
+0 of power-domains on the /soc nodes named in MOVED whose first power domain
+is that entry's parent. `check` compares the result with a flag build; a
+version that also moved the IOMMUs and mailboxes failed it, which is how
+MOVED was pinned down.
+
+Needs fdtget/fdtput (package dtc).
+"""
+import argparse
+import hashlib
+import os
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+
+# Devices in the kernel's #ifdef APPLE_USE_PMP blocks, by SoC (root
+# compatible). Check against the source for every new kernel series; t6002
+# (a second die) and t8112 need more than this list and are not supported.
+MOVED = {
+    "apple,t6000": ("dcp@", "isp@", "avd@", "msr@"),
+    "apple,t6001": ("dcp@", "isp@", "avd@", "msr@"),
+}
+
+FDT_MAGIC = 0xD00DFEED
+
+
+class Refused(Exception):
+    """The tree is not one this tool will patch; nothing was written."""
+
+
+def fdt(*args, check=True):
+    r = subprocess.run(args, capture_output=True, text=True)
+    if check and r.returncode:
+        raise RuntimeError(f"{' '.join(args)}: {r.stderr.strip()}")
+    return r
+
+
+class Tree:
+    """Read access to one DTB through fdtget, with the node list and the
+    phandles read once."""
+
+    def __init__(self, path):
+        self.path = path
+        self.nodes = self._all_nodes()
+        self.phandle = {}
+        for n in self.nodes:
+            v = self.get(n, "phandle")
+            if v:
+                self.phandle[n] = int(v, 16)
+
+    def get(self, node, prop, typ="x"):
+        r = fdt("fdtget", "-t", typ, self.path, node, prop, check=False)
+        return r.stdout.strip() if r.returncode == 0 else None
+
+    def children(self, node):
+        return fdt("fdtget", "-l", self.path, node).stdout.split()
+
+    def props(self, node):
+        return fdt("fdtget", "-p", self.path, node).stdout.split()
+
+    def _all_nodes(self):
+        out, todo = [], ["/"]
+        while todo:
+            n = todo.pop()
+            out.append(n)
+            todo += [(n.rstrip("/") + "/" + c) for c in self.children(n)]
+        return out
+
+
+def compatible(path):
+    r = fdt("fdtget", "-t", "s", path, "/", "compatible", check=False)
+    return r.stdout.split() if r.returncode == 0 else []
+
+
+def board_of(compat):
+    """['apple,j314c', 'apple,t6001', 'apple,arm-platform'] -> 't6001-j314c'."""
+    names = [c.split(",", 1)[1] for c in compat if c.startswith("apple,")]
+    soc = [n for n in names if n.startswith("t") and n[1:].isdigit()]
+    brd = [n for n in names if n.startswith("j")]
+    return f"{soc[0]}-{brd[0]}" if soc and brd else None
+
+
+def sha256(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def patch_tree(src, dst):
+    """Apply the PMP fixup to a copy of src at dst. Returns the moves made."""
+    shutil.copyfile(src, dst)
+    t = Tree(dst)
+    socs = t.children("/soc")
+    pmp = [c for c in socs if c.startswith("pmp@")]
+    rep = [c for c in socs if c.startswith("pmp_report@")]
+    if len(pmp) != 1 or len(rep) != 1:
+        raise Refused(f"{src}: no single pmp@/pmp_report@ node under /soc: this tree has no PMP")
+    pmp, rep = "/soc/" + pmp[0], "/soc/" + rep[0]
+    compat = compatible(dst)
+    family = [c for c in compat if c in MOVED]
+    if not family:
+        raise Refused(f"{src}: SoC {compat} is not supported (t6000 and t6001 only)")
+    moved_names = MOVED[family[0]]
+    if t.get("/aliases", "pmp", "s"):
+        raise Refused(f"{src}: already has a pmp alias (patched before, or built with APPLE_USE_PMP)")
+
+    nxt = max(t.phandle.values()) + 1
+    owner = {v: k for k, v in t.phandle.items()}
+    pds = {n: t.get(n, "power-domains") for n in t.nodes
+           if n.startswith("/soc/") and n.count("/") == 2 and n.split("/")[2].startswith(moved_names)}
+
+    fdt("fdtput", "-t", "s", dst, "/aliases", "pmp", pmp)
+    moved = []
+    for e in t.children(rep):
+        en = f"{rep}/{e}"
+        parent = t.get(en, "power-domains")
+        if not parent or len(parent.split()) != 1:
+            continue
+        parent = int(parent, 16)
+        users = [(n, pd.split()) for n, pd in sorted(pds.items())
+                 if pd and int(pd.split()[0], 16) == parent]
+        if not users:
+            continue
+        ph = t.phandle.get(en)
+        if ph is None:
+            ph, nxt = nxt, nxt + 1
+            fdt("fdtput", "-t", "x", dst, en, "phandle", f"{ph:x}")
+        for n, cells in users:
+            cells[0] = f"{ph:x}"
+            fdt("fdtput", "-t", "x", dst, n, "power-domains", *cells)
+            moved.append((n, owner.get(parent, hex(parent)), en))
+    return pmp, moved
+
+
+def canon(path):
+    """Node path -> property values, with power-domains phandles replaced by
+    the target node's path and phandle properties left out: equal for two
+    trees that differ only in phandle numbering."""
+    t = Tree(path)
+    owner = {v: k for k, v in t.phandle.items()}
+    out = {}
+    for n in t.nodes:
+        for p in t.props(n):
+            if p == "phandle":
+                continue
+            v = t.get(n, p, "bx")
+            if p == "power-domains":
+                v = [owner.get(int(c, 16), c) for c in t.get(n, p).split()]
+            out[(n, p)] = v
+    return out
+
+
+def digest(path):
+    """sha256 over the canonical form: independent of byte layout, so a
+    different fdtput version that lays the tree out differently still
+    matches."""
+    h = hashlib.sha256()
+    for (n, p), v in sorted(canon(path).items()):
+        h.update(f"{n}\0{p}\0{v!r}\n".encode())
+    return h.hexdigest()
+
+
+def read_validated(path):
+    """Rows: board, kernel release, stock sha256, patched digest, note."""
+    rows = []
+    with open(path) as f:
+        for line in f:
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            w = line.split(None, 4)
+            if len(w) < 4:
+                raise SystemExit(f"{path}: bad line: {line}")
+            rows.append({"board": w[0], "kernel": w[1], "stock": w[2], "patched": w[3],
+                         "note": w[4] if len(w) > 4 else ""})
+    return rows
+
+
+def validate(validated, dtb, board=None):
+    """The validated row for this exact stock tree, or Refused."""
+    b = board_of(compatible(dtb))
+    if b is None:
+        raise Refused(f"{dtb}: not an Apple silicon device tree")
+    if board and b != board:
+        raise Refused(f"{dtb} is for {b}, this machine is {board}")
+    s = sha256(dtb)
+    rows = read_validated(validated)
+    for r in rows:
+        if r["board"] == b and r["stock"] == s:
+            return r
+    known = sorted({r["board"] for r in rows})
+    if b not in known:
+        raise Refused(f"{b} is not a validated board (validated: {', '.join(known)})")
+    kernels = ", ".join(r["kernel"] for r in rows if r["board"] == b)
+    raise Refused(f"{dtb} (sha256 {s[:16]}...) is not a validated {b} device tree "
+                  f"(validated for {b}: {kernels}); trees of any other kernel, older or newer, "
+                  f"or changed trees are refused until a package update lists them")
+
+
+def cmd_patch(a):
+    row = validate(a.validated, a.input, a.board)
+    with tempfile.TemporaryDirectory() as t:
+        out = os.path.join(t, "patched.dtb")
+        pmp, moved = patch_tree(a.input, out)
+        d = digest(out)
+        if d != row["patched"]:
+            raise Refused(f"the patched tree's digest {d[:16]}... is not the validated "
+                          f"{row['patched'][:16]}...; not writing it")
+        shutil.copyfile(out, a.output)
+    for n, old, new in moved:
+        print(f"  {n}: power-domains[0] {old} -> {new}")
+    print(f"  /aliases/pmp = {pmp}")
+    print(f"patched {row['board']} ({row['kernel']}): {a.output}")
+
+
+def cmd_check(a):
+    with tempfile.TemporaryDirectory() as t:
+        out = os.path.join(t, "patched.dtb")
+        _, moved = patch_tree(a.stock, out)
+        x, y = canon(out), canon(a.flag)
+    # power-domains are compared by target path, the aliases by value; other
+    # properties that hold phandles differ only in numbering between the two
+    # builds, so for them only their presence is compared.
+    diffs = [(k, x.get(k), y.get(k)) for k in sorted(set(x) & set(y))
+             if (k[1] == "power-domains" or k[0] == "/aliases") and x.get(k) != y.get(k)]
+    only = sorted(set(x) ^ set(y))
+    for k, u, v in diffs:
+        print(f"DIFF {k}: patched {u} vs flag-built {v}")
+    for k in only:
+        print(f"ONLY IN {'patched' if k in x else 'flag-built'}: {k}")
+    npd = sum(1 for k in x if k[1] == "power-domains")
+    ok = not diffs and not only
+    print("CHECK", "PASS" if ok else "FAIL", f"({len(moved)} devices moved, {npd} power-domains "
+          f"properties, {len(x)} properties compared)")
+    return 0 if ok else 1
+
+
+def fdt_header(buf, off):
+    """(totalsize) of a plausible FDT header at off, else None."""
+    if off + 40 > len(buf):
+        return None
+    magic, size, o_struct, o_strings, o_rsv, version = struct.unpack_from(">6I", buf, off)
+    if magic != FDT_MAGIC or version != 17 or size < 40 or off + size > len(buf):
+        return None
+    if not (0 < o_struct < size and 0 < o_strings <= size and 0 < o_rsv < size):
+        return None
+    return size
+
+
+def bootbin_trees(buf, m1n1=None):
+    """[(offset, bytes)] of the DTBs in an m1n1 stage 2 image: m1n1, then the
+    DTBs back to back, then gzip'd U-Boot (as update-m1n1 writes it)."""
+    starts = []
+    if m1n1 is not None and buf.startswith(m1n1):
+        starts = [len(m1n1)]
+    else:
+        i = buf.find(struct.pack(">I", FDT_MAGIC))
+        while i >= 0:
+            starts.append(i)
+            i = buf.find(struct.pack(">I", FDT_MAGIC), i + 1)
+    for s in starts:
+        out, off = [], s
+        while True:
+            size = fdt_header(buf, off)
+            if size is None:
+                break
+            out.append((off, buf[off:off + size]))
+            off += size
+        if out and buf[off:off + 2] == b"\x1f\x8b":
+            return out
+    return []
+
+
+def cmd_bootbin(a):
+    with open(a.bootbin, "rb") as f:
+        buf = f.read()
+    m1n1 = None
+    if a.m1n1:
+        with open(a.m1n1, "rb") as f:
+            m1n1 = f.read()
+    trees = bootbin_trees(buf, m1n1)
+    if not trees:
+        print(f"{a.bootbin}: no device trees found", file=sys.stderr)
+        return 1
+    with tempfile.TemporaryDirectory() as t:
+        p = os.path.join(t, "x.dtb")
+        for off, blob in trees:
+            with open(p, "wb") as f:
+                f.write(blob)
+            alias = fdt("fdtget", "-t", "s", p, "/aliases", "pmp", check=False).returncode == 0
+            print(board_of(compatible(p)) or "?", hashlib.sha256(blob).hexdigest(),
+                  "pmp" if alias else "-", off)
+    return 0
+
+
+def cmd_board(a):
+    with open(os.path.join(a.dt, "compatible"), "rb") as f:
+        compat = f.read().decode(errors="replace").split("\0")
+    b = board_of(compat)
+    if not b:
+        print(f"not an Apple silicon machine ({compat})", file=sys.stderr)
+        return 1
+    print(b)
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("board")
+    p.add_argument("--dt", default="/proc/device-tree")
+    p = sub.add_parser("validate")
+    p.add_argument("--validated", required=True)
+    p.add_argument("--board")
+    p.add_argument("dtb")
+    p = sub.add_parser("patch")
+    p.add_argument("--validated", required=True)
+    p.add_argument("--board")
+    p.add_argument("input")
+    p.add_argument("output")
+    p = sub.add_parser("check")
+    p.add_argument("stock")
+    p.add_argument("flag")
+    p = sub.add_parser("digest")
+    p.add_argument("dtb")
+    p = sub.add_parser("bootbin")
+    p.add_argument("--m1n1")
+    p.add_argument("bootbin")
+    a = ap.parse_args()
+    try:
+        if a.cmd == "board":
+            return cmd_board(a)
+        if a.cmd == "validate":
+            r = validate(a.validated, a.dtb, a.board)
+            print(r["board"], r["kernel"], r["note"])
+            return 0
+        if a.cmd == "patch":
+            cmd_patch(a)
+            return 0
+        if a.cmd == "check":
+            return cmd_check(a)
+        if a.cmd == "digest":
+            print(digest(a.dtb))
+            return 0
+        return cmd_bootbin(a)
+    except Refused as e:
+        print(f"pmp-dtb: refused: {e}", file=sys.stderr)
+        return 3
+
+
+if __name__ == "__main__":
+    sys.exit(main())

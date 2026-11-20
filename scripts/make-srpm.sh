@@ -8,7 +8,7 @@
 #   scripts/make-srpm.sh --list
 #
 # Packages: kernel apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus mesa-coopmat
-#           qemu-vmapple reims-vgpu-backend
+#           qemu-vmapple reims-vgpu-backend apple-pmp-enable
 #
 # Environment:
 #   CACHE_DIR      downloads and git checkouts (default: <repo>/.cache)
@@ -26,7 +26,7 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 PACKAGES=(kernel apple-avd apple-ave apple-silicon-thunderbolt mesa-honeykrisp-plus mesa-coopmat qemu-vmapple
-          reims-vgpu-backend)
+          reims-vgpu-backend apple-pmp-enable)
 CACHE_DIR=${CACHE_DIR:-$HERE/.cache}
 
 die() { echo "make-srpm: $*" >&2; exit 1; }
@@ -473,7 +473,7 @@ build_reims() {
 
 case $pkg in
 kernel) build_kernel ;;
-apple-avd|apple-ave|apple-silicon-thunderbolt) build_own ;;
+apple-avd|apple-ave|apple-silicon-thunderbolt|apple-pmp-enable) build_own ;;
 mesa-honeykrisp-plus) build_mesa ;;
 mesa-coopmat) build_mesa_coopmat ;;
 qemu-vmapple) build_qemu ;;
