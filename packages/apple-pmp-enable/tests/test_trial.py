@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import textwrap
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -509,12 +510,39 @@ class TrialTest(unittest.TestCase):
         self.enable()
         self.assertIn("state               armed", self.ok(m.run("status")).stdout)
 
+    def bak_names(self):
+        return sorted(n for n in os.listdir(self.m.path("esp/m1n1"))
+                      if n.startswith("boot.bin.pre-pmp.bak-"))
+
     def test_dry_run_names_an_existing_pre_pmp_image(self):
         m = self.m
         m.write("esp/m1n1/boot.bin.pre-pmp", b"someone else's backup")
         r = self.ok(m.run("enable", "--dry-run"))
-        self.assertIn("replaces the existing boot.bin.pre-pmp", r.stdout)
+        self.assertIn("differs: it is kept as boot.bin.pre-pmp.bak-", r.stdout)
         self.assertEqual(m.read("esp/m1n1/boot.bin.pre-pmp"), b"someone else's backup")
+        self.assertEqual(self.bak_names(), [])
+
+    def test_enable_keeps_a_differing_pre_pmp_image(self):
+        m = self.m
+        m.write("esp/m1n1/boot.bin.pre-pmp", b"someone else's backup")
+        stamp = time.strftime("%Y%m%d", time.gmtime())
+        m.write("esp/m1n1/boot.bin.pre-pmp.bak-" + stamp, b"an older one")
+        self.enable()
+        self.assertEqual(m.read("esp/m1n1/boot.bin.pre-pmp"), m.before)
+        self.assertEqual(self.bak_names(), ["boot.bin.pre-pmp.bak-" + stamp,
+                                            "boot.bin.pre-pmp.bak-" + stamp + "-2"])
+        self.assertEqual(m.read("esp/m1n1/boot.bin.pre-pmp.bak-" + stamp), b"an older one")
+        self.assertEqual(m.read("esp/m1n1/boot.bin.pre-pmp.bak-" + stamp + "-2"),
+                         b"someone else's backup")
+
+    def test_enable_overwrites_an_identical_pre_pmp_image(self):
+        m = self.m
+        m.write("esp/m1n1/boot.bin.pre-pmp", m.before)
+        r = self.ok(m.run("enable", "--dry-run"))
+        self.assertNotIn("kept as", r.stdout)
+        self.enable()
+        self.assertEqual(m.read("esp/m1n1/boot.bin.pre-pmp"), m.before)
+        self.assertEqual(self.bak_names(), [])
 
     def test_deadman_option(self):
         m = self.m

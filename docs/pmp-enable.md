@@ -73,9 +73,9 @@ the EFI partition mounted at `/boot/efi` is not the one m1n1 boots from.
 
 1. saves the current `boot.bin` as `m1n1/boot.bin.pre-pmp` on the EFI
    partition (and in `/var/lib/apple-pmp-enable`), with
-   `m1n1/PMP-RECOVERY.txt` beside it. An existing `boot.bin.pre-pmp` is
-   replaced (`--dry-run` says so): copy it away first if it is a backup
-   of your own;
+   `m1n1/PMP-RECOVERY.txt` beside it. An existing `boot.bin.pre-pmp`
+   that differs (a backup of your own, or one from an earlier trial) is
+   kept as `boot.bin.pre-pmp.bak-YYYYMMDD` (`--dry-run` names it);
 2. adds `module_blacklist=pmp` to every boot entry (with grubby, so also
    to `/etc/kernel/cmdline` for kernels installed meanwhile). With the
    `pmp` module not loaded, the PMP device tree is inert: the PMP is not
@@ -162,7 +162,7 @@ use `abort` instead (before the trial boot it restores everything; on the
 trial boot the PMP stays on until that boot ends). Removing the package
 never touches the EFI partition or the boot entries; if the PMP was
 committed it stays on until `boot.bin` is rewritten (`disable` first, or
-the next `update-m1n1`). `boot.bin.pre-pmp`, `PMP-RECOVERY.txt` and
+the next `update-m1n1`). `boot.bin.pre-pmp` (and any `.bak-*` copies), `PMP-RECOVERY.txt` and
 `/var/lib/apple-pmp-enable` are left in place; delete them when you no
 longer need them.
 

@@ -101,6 +101,18 @@ check_esp() {
         die "$ESP_MOUNT is $dev, but m1n1 boots from the ESP with PARTUUID $uuid ($want)"
 }
 
+# A boot.bin.pre-pmp that differs from the image about to be saved (someone's
+# own backup, or one from an earlier trial) is kept as boot.bin.pre-pmp.bak-DATE
+# (-2, -3... if that is taken). Prints the name it would use; nothing otherwise.
+pre_pmp_bak_name() {
+    local pre=$1/boot.bin.pre-pmp base n=2 name
+    [ -e "$pre" ] || return 0
+    cmp -s "$pre" "$BEFORE" && return 0
+    base=$pre.bak-$(date -u +%Y%m%d); name=$base
+    while [ -e "$name" ]; do name=$base-$n; n=$((n + 1)); done
+    echo "$name"
+}
+
 # write SRC to DST on the ESP: copy beside it, sync, rename, verify
 esp_write() {
     local src=$1 dst=$2
@@ -362,7 +374,7 @@ cmd_check() {
 }
 
 cmd_enable() {
-    local dry=0 min=15 w esp src id cand_sha before_sha
+    local dry=0 min=15 w esp src id cand_sha before_sha bak
     while [ $# -gt 0 ]; do
         case $1 in
         --dry-run) dry=1 ;;
@@ -380,9 +392,10 @@ cmd_enable() {
     esp=$(esp_dir); src=$(entry_file "$KREL")
     if [ $dry = 1 ]; then
         local replaces=""
-        [ -e "$esp/boot.bin.pre-pmp" ] &&
+        bak=$(pre_pmp_bak_name "$esp")
+        [ -n "$bak" ] &&
             replaces="
-     (this replaces the existing boot.bin.pre-pmp, $(short "$(sum "$esp/boot.bin.pre-pmp")")...: keep a copy if you need it)"
+     (the existing boot.bin.pre-pmp, $(short "$(sum "$esp/boot.bin.pre-pmp")")..., differs: it is kept as $(basename "$bak"))"
         cat <<EOF
 apple-pmp-enable: dry run: nothing was changed. enable would:
   1. save $esp/boot.bin as $esp/boot.bin.pre-pmp (and in $STATE_DIR), with PMP-RECOVERY.txt beside it$replaces
@@ -404,6 +417,11 @@ EOF
     if ! { cp "$CANDIDATE" "$STATE_DIR/boot.bin.pmp" && cp "$BEFORE" "$STATE_DIR/boot.bin.before" &&
            cp "$w/$BOARD.dtb" "$STATE_DIR/$BOARD-pmp.dtb"; }; then
         die "cannot write $STATE_DIR"
+    fi
+    bak=$(pre_pmp_bak_name "$esp")
+    if [ -n "$bak" ]; then
+        mv "$esp/boot.bin.pre-pmp" "$bak" && sync || die "cannot rename $esp/boot.bin.pre-pmp to $bak"
+        say "kept the existing boot.bin.pre-pmp (it differs) as $bak"
     fi
     esp_write "$BEFORE" "$esp/boot.bin.pre-pmp" || die "cannot save $esp/boot.bin.pre-pmp"
     recovery_note > "$esp/PMP-RECOVERY.txt.new" && mv -f "$esp/PMP-RECOVERY.txt.new" "$esp/PMP-RECOVERY.txt"
