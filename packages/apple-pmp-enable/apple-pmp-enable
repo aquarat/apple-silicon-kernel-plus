@@ -420,7 +420,10 @@ EOF
     fi
     bak=$(pre_pmp_bak_name "$esp")
     if [ -n "$bak" ]; then
-        mv "$esp/boot.bin.pre-pmp" "$bak" && sync || die "cannot rename $esp/boot.bin.pre-pmp to $bak"
+        if ! mv "$esp/boot.bin.pre-pmp" "$bak"; then
+            die "cannot rename $esp/boot.bin.pre-pmp to $bak"
+        fi
+        sync
         say "kept the existing boot.bin.pre-pmp (it differs) as $bak"
     fi
     esp_write "$BEFORE" "$esp/boot.bin.pre-pmp" || die "cannot save $esp/boot.bin.pre-pmp"
