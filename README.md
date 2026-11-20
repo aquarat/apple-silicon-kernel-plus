@@ -28,7 +28,7 @@ Linux or Fedora; report them here.
 | `dkms-apple-avd` | The Asahi AVD video decoder driver with fixes for long-running streams, built by DKMS. [packages/apple-avd](packages/apple-avd) | stable | yes, `7.3.1.2-1` |
 | `apple-ave`, `dkms-apple-ave` | A V4L2 H.264/HEVC encoder driver for the AVE block, reverse engineered, and `apple-ave-fetch-firmware`, which makes its firmware files on your Mac from Apple's own image. No Apple firmware or Apple data included. [packages/apple-ave](packages/apple-ave) | **experimental** ([why](packages/apple-ave/README.md#status)) | yes, `0.99.6-3` |
 | `mesa-honeykrisp-plus` | Mesa's Asahi Vulkan driver (Honeykrisp) with two shader compiler fixes, installed beside the system Mesa and used only through `VK_DRIVER_FILES`. Patch 0002 is still being validated. [packages/mesa-honeykrisp-plus](packages/mesa-honeykrisp-plus) | stable (0002: in validation) | yes, `26.2.4-2` |
-| `mesa-coopmat` | Mesa's Asahi Vulkan driver from the `coopmat` branch of [aquarat/mesa](https://github.com/aquarat/mesa) (Mesa main + `VK_KHR_cooperative_matrix`), pinned to one commit, for GPU compute through ggml (llama.cpp, stable-diffusion.cpp). Its own versioned directory, opt-in per process with `with-coopmat <command>`; the system Mesa stays the default. [packages/mesa-coopmat](packages/mesa-coopmat) | experimental (new package) | an older pin, `26.3.0~devel^20260906git71969e3-1` (main's `20e478a` not built yet) |
+| `mesa-coopmat` | Mesa's Asahi Vulkan driver from the `coopmat-27` branch of [aquarat/mesa](https://github.com/aquarat/mesa) (Mesa main + `VK_KHR_cooperative_matrix`), pinned to one commit, for GPU compute through ggml (llama.cpp, stable-diffusion.cpp). Its own versioned directory, opt-in per process with `with-coopmat <command>`; the system Mesa stays the default. [packages/mesa-coopmat](packages/mesa-coopmat) | experimental (new package) | yes, `27.0.0~devel^20261119git5956a5b-1` |
 | `qemu-vmapple` | QEMU with the `vmapple` machine for macOS guests, installed beside Fedora's qemu. Its paravirtual GPU runs out of process (`apv-gpu-proxy` forwards it to `reims-vgpu-backend`). [packages/qemu-vmapple](packages/qemu-vmapple) | experimental (in production use since 2026-10-19) | yes, `11.1.50^20261110gitacde6ba-2` |
 | `reims-vgpu-backend` | Reims, the paravirtual GPU of macOS guests, as its own program: runs the guest's Metal work on the host's Vulkan driver (with `mesa-honeykrisp-plus`), for `qemu-vmapple`. [packages/reims-vgpu-backend](packages/reims-vgpu-backend) | experimental (in production use since 2026-10-19) | yes, `0.1.0^20261110git3db7ff2-2` |
 
@@ -293,7 +293,7 @@ Short version ([docs/update-policy.md](docs/update-policy.md)):
   kernel series; until then DKMS skips the new series and the in-tree
   driver is used.
 - **mesa-honeykrisp-plus:** follows Fedora's Mesa version, by hand.
-- **mesa-coopmat:** follows the `coopmat` branch of aquarat/mesa, by hand.
+- **mesa-coopmat:** follows the `coopmat-27` branch of aquarat/mesa, by hand (see [docs/mesa-coopmat.md](docs/mesa-coopmat.md)).
 - **qemu-vmapple, reims-vgpu-backend, apple-ave:** follow their upstream
   repositories, by hand.
 

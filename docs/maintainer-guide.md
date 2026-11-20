@@ -17,6 +17,7 @@ scripts/kernel-build-check.sh  compiles what the kernel patches touch, and the D
 scripts/rebase-avd.sh    rebuilds packages/apple-avd/src for a kernel
 scripts/copr-setup.sh    creates the COPR project and package definitions
 scripts/bench-charts.py  draws docs/img/*.svg from docs/data/benchmarks.json (--check in CI)
+scripts/copr-sync.py     which packages COPR has not built at their spec's version; starts those builds
 .copr/Makefile           COPR's make_srpm entry point
 container/               the tools image (install-tools.sh is shared with CI)
 .github/workflows/       ci, kernel-build, kernel-watch, copr-build
@@ -267,6 +268,33 @@ pair (`GPU_BACKEND_BIN`, see packages/qemu-vmapple/README.md).
 `fedora-44-aarch64` chroot and eight SCM packages using the `make_srpm`
 method. The SRPM step has network access in COPR; the RPM builds do not
 need it, so "enable internet" stays off.
+
+Defining a package in COPR does not build it. Builds are started by:
+
+- `kernel-watch` (daily): the kernel, once `kernel-plus.conf` on `main`
+  names a release COPR has not built and its prep check passes;
+- `copr-build`, for every other package: after a merge to `main` that
+  touches `packages/`, daily, and by hand (Actions > copr-build > Run
+  workflow, `missing`), `scripts/copr-sync.py --build` starts a build of
+  each package whose spec names a version-release COPR has no build of.
+  A build that failed at that version is reported as a warning and not
+  retried; fix the package (a new `Release` is a new version-release) or
+  run the workflow by hand with the package's name.
+
+`scripts/copr-sync.py` without `--build` only reports (no credentials
+needed):
+
+```sh
+scripts/copr-sync.py              # every package except the kernel
+scripts/copr-sync.py apple-avd    # one
+```
+
+Until November 2026 `copr-build` ran only by hand and only `apple-ave` and
+`mesa-coopmat` had been dispatched, so `apple-avd`,
+`apple-silicon-thunderbolt`, `mesa-honeykrisp-plus`, `qemu-vmapple` and
+`reims-vgpu-backend` were defined in COPR but never built, and installing
+them failed. Nothing in the packages was wrong: their first builds, started
+by hand from `main`, succeeded.
 
 A new Fedora release: add its chroot (`copr-cli edit-chroot` /
 `copr-cli modify --chroot`), and pass `KERNEL_CHROOT=fedora-NN-aarch64` for
