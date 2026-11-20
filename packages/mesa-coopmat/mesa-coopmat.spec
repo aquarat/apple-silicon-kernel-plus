@@ -9,17 +9,18 @@
 # the driver of every other program. A program uses this driver only when
 # started through with-coopmat or with VK_DRIVER_FILES naming its ICD file.
 #
-# Source: github.com/aquarat/mesa, branch coopmat, pinned to mesa_commit.
+# Source: github.com/aquarat/mesa, branch coopmat-27, pinned to mesa_commit.
 # make-srpm.sh fetches exactly that commit and refuses it unless its tree is
 # mesa_tree and its VERSION file is mesa_version. It is upstream Mesa main
-# 063a4640270b (26.3.0-devel) plus 39 commits of this project and 3 upstream
-# AGX compiler fixes cherry-picked from later Mesa main; it is not
-# Fedora's Mesa version (README.md, "Version drift").
-%global mesa_commit  20e478a1ab11f06d388c29fdbffbab85f349ccdd
-%global mesa_tree    515e3eeabb5e013d5cd74a438b5ced319321331a
-%global mesa_date    20261117
-%global mesa_version 26.3.0-devel
-%global mesa_base    063a4640270ba4e1cf9ca7e916fcc090ab24c3a4
+# 23732583a81c (27.0.0-devel, 2026-11-19) plus 42 commits of this project
+# (the coopmat series rebased; the 3 AGX compiler fixes the previous pin
+# cherry-picked are upstream now); it is not Fedora's Mesa version
+# (README.md, "Version drift").
+%global mesa_commit  5956a5be4777994ff25cee9c5f85485eee460df2
+%global mesa_tree    a617ac5972a62a1d7ffd946ec1933703b5547584
+%global mesa_date    20261119
+%global mesa_version 27.0.0-devel
+%global mesa_base    23732583a81cf342daa311e46afcf6d05012fae1
 %global mesa_short   %(c=%{mesa_commit}; echo ${c:0:12})
 
 %global coopmat_root   %{_libdir}/apple-silicon-kernel-plus/mesa-coopmat
@@ -33,7 +34,7 @@
 %global _build_id_links alldebug
 
 Name:           mesa-coopmat
-Version:        26.3.0~devel^%{mesa_date}git%(c=%{mesa_commit}; echo ${c:0:7})
+Version:        27.0.0~devel^%{mesa_date}git%(c=%{mesa_commit}; echo ${c:0:7})
 Release:        1%{?dist}
 Summary:        Mesa Asahi Vulkan driver with cooperative matrices, opt-in per process
 License:        MIT
@@ -74,12 +75,11 @@ BuildRequires:  python3
 Requires:       vulkan-loader
 
 %description
-Mesa's Vulkan driver for Apple M1/M2 GPUs (Honeykrisp) from the coopmat
+Mesa's Vulkan driver for Apple M1/M2 GPUs (Honeykrisp) from the coopmat-27
 branch of github.com/aquarat/mesa (commit %{mesa_short}): Mesa main of
-2026-08-26 (%{mesa_version}) with this project's Honeykrisp compute and
-profiling changes, VK_KHR_cooperative_matrix and three later upstream AGX
-compiler fixes, which ggml's Vulkan backend
-uses for matrix multiplication and flash attention.
+2026-11-19 (%{mesa_version}) with this project's Honeykrisp compute and
+profiling changes and VK_KHR_cooperative_matrix, which ggml's Vulkan
+backend uses for matrix multiplication and flash attention.
 
 It is installed in its own versioned directory under
 %{_libdir}/apple-silicon-kernel-plus/mesa-coopmat/ and does not
@@ -113,7 +113,7 @@ install -m 0644 %{SOURCE2} %{buildroot}%{coopmat_prefix}/README.md
 install -m 0644 docs/license.rst %{buildroot}%{coopmat_prefix}/license.rst
 cat > %{buildroot}%{coopmat_prefix}/PROVENANCE <<EOF
 package:  %{name}-%{version}-%{release}
-source:   https://github.com/aquarat/mesa branch coopmat
+source:   https://github.com/aquarat/mesa branch coopmat-27
 commit:   %{mesa_commit} (%{mesa_date})
 tree:     %{mesa_tree}
 upstream: Mesa main %{mesa_base} (%{mesa_version})
@@ -151,6 +151,13 @@ echo "driver:   lib/libvulkan_asahi.so sha256 $(sha256sum %{buildroot}%{coopmat_
 %{coopmat_prefix}/share/
 
 %changelog
+* Thu Nov 19 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 27.0.0~devel^20261119git5956a5b-1
+- aquarat/mesa coopmat-27 5956a5be4777: the coopmat series rebased onto
+  Mesa main 23732583a81c (27.0.0-devel). The three AGX compiler fixes the
+  previous pin cherry-picked (bebbaf49, bbeb2dca, b47973d0) are upstream
+  now and were dropped; the light in-stream barrier for buffer-only
+  compute dependencies (aquarat/mesa PR #1) is included
+
 * Tue Nov 17 2026 aquarat <3090997+aquarat@users.noreply.github.com> - 26.3.0~devel^20261117git20e478a-1
 - aquarat/mesa coopmat 20e478a1ab11: 71969e371aea plus three AGX compiler
   fixes cherry-picked from Mesa main, all backported upstream to mesa-26.2.7:
