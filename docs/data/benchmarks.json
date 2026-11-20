@@ -1,0 +1,155 @@
+{
+  "comment": "Measured results behind docs/img/*.svg (scripts/bench-charts.py). Every value cites the document that records it; a value is [low, high] where the document gives a range or two runs. Change a number only together with its document.",
+  "charts": [
+    {
+      "id": "pmp-cpu-stream",
+      "title": "CPU memory bandwidth with the PMP running",
+      "subtitle": "M1 Max (t6001), STREAM, 10 threads",
+      "unit": "GB/s",
+      "series": [
+        {"name": "PMP not running", "role": "reference"},
+        {"name": "PMP running, no requests (memvote off)", "role": "before"},
+        {"name": "PMP running, apple-cpu-memvote auto", "role": "after"}
+      ],
+      "data": [
+        {"category": "copy", "series": "PMP not running", "value": 110, "source": "docs/pmp-fabric-dram-requests.md"},
+        {"category": "copy", "series": "PMP running, no requests (memvote off)", "value": 54.5, "source": "docs/pmp-fabric-dram-requests.md"},
+        {"category": "copy", "series": "PMP running, apple-cpu-memvote auto", "value": 160.6, "source": "docs/pmp-fabric-dram-requests.md"},
+        {"category": "triad", "series": "PMP not running", "value": 133, "source": "docs/pmp-fabric-dram-requests.md"},
+        {"category": "triad", "series": "PMP running, no requests (memvote off)", "value": 67.2, "source": "docs/pmp-fabric-dram-requests.md"},
+        {"category": "triad", "series": "PMP running, apple-cpu-memvote auto", "value": 165.5, "source": "docs/pmp-fabric-dram-requests.md"}
+      ]
+    },
+    {
+      "id": "pmp-gpu-matvec",
+      "title": "GPU memory bandwidth with the PMP running",
+      "subtitle": "M1 Max (t6001), Vulkan mat-vec 4096x14336 (llama.cpp test-backend-ops)",
+      "unit": "GB/s",
+      "series": [
+        {"name": "PMP not running", "role": "reference"},
+        {"name": "PMP running, no GPU report", "role": "before"},
+        {"name": "PMP running, GPU report (0035-0037)", "role": "after"}
+      ],
+      "data": [
+        {"category": "f32", "series": "PMP not running", "value": 167.6, "source": "docs/pmp-gpu-report.md"},
+        {"category": "f32", "series": "PMP running, no GPU report", "value": 162.7, "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "f32", "series": "PMP running, GPU report (0035-0037)", "value": 171.8, "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "f16", "series": "PMP not running", "value": 217.4, "source": "docs/pmp-gpu-report.md"},
+        {"category": "f16", "series": "PMP running, no GPU report", "value": 190.8, "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "f16", "series": "PMP running, GPU report (0035-0037)", "value": 221.8, "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "bf16", "series": "PMP not running", "value": 236.9, "source": "docs/pmp-gpu-report.md"},
+        {"category": "bf16", "series": "PMP running, no GPU report", "value": 190.7, "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "bf16", "series": "PMP running, GPU report (0035-0037)", "value": 263.1, "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "q4_0", "series": "PMP not running", "value": 147.8, "source": "docs/pmp-gpu-report.md"},
+        {"category": "q4_0", "series": "PMP running, no GPU report", "value": 134.4, "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "q4_0", "series": "PMP running, GPU report (0035-0037)", "value": 154.4, "source": "docs/kernel-7.3.4-rebase.md"}
+      ]
+    },
+    {
+      "id": "pmp-m1pro",
+      "title": "M1 Pro: 7.3.1 plus3 against 7.3.4 plus5, PMP running",
+      "subtitle": "M1 Pro (t6000), background video-recorder load; STREAM 8 threads, two runs each; GPU: Vulkan mat-vec 4096x14336",
+      "unit": "GB/s",
+      "series": [
+        {"name": "7.3.1 plus3 (no requests, no GPU report)", "role": "before"},
+        {"name": "7.3.4 plus5 (memvote auto, GPU report)", "role": "after"}
+      ],
+      "data": [
+        {"category": "STREAM copy", "series": "7.3.1 plus3 (no requests, no GPU report)", "value": [33.7, 35.8], "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "STREAM copy", "series": "7.3.4 plus5 (memvote auto, GPU report)", "value": [141.2, 144.2], "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "STREAM triad", "series": "7.3.1 plus3 (no requests, no GPU report)", "value": [30.8, 34.0], "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "STREAM triad", "series": "7.3.4 plus5 (memvote auto, GPU report)", "value": [127.9, 131.9], "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "GPU f32", "series": "7.3.1 plus3 (no requests, no GPU report)", "value": 42.6, "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "GPU f32", "series": "7.3.4 plus5 (memvote auto, GPU report)", "value": 81.8, "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "GPU f16", "series": "7.3.1 plus3 (no requests, no GPU report)", "value": 41.9, "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "GPU f16", "series": "7.3.4 plus5 (memvote auto, GPU report)", "value": 96.2, "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "GPU bf16", "series": "7.3.1 plus3 (no requests, no GPU report)", "value": 41.7, "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "GPU bf16", "series": "7.3.4 plus5 (memvote auto, GPU report)", "value": 125.2, "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "GPU q4_0", "series": "7.3.1 plus3 (no requests, no GPU report)", "value": 38.5, "source": "docs/kernel-7.3.4-rebase.md"},
+        {"category": "GPU q4_0", "series": "7.3.4 plus5 (memvote auto, GPU report)", "value": 82.7, "source": "docs/kernel-7.3.4-rebase.md"}
+      ]
+    },
+    {
+      "id": "pmp-power",
+      "title": "System power, PMP not running against running",
+      "subtitle": "M1 Max (t6001) laptop on AC, Asahi 7.1.13 kernel, fixed backlight, SMC total system power; four boots off/on/off/on",
+      "unit": "W",
+      "series": [
+        {"name": "PMP not running", "role": "reference"},
+        {"name": "PMP running", "role": "after"}
+      ],
+      "data": [
+        {"category": "idle (6 min mean, per boot)", "series": "PMP not running", "value": [7.94, 8.48], "source": "docs/pmp-fabric-dram-requests.md"},
+        {"category": "idle (6 min mean, per boot)", "series": "PMP running", "value": [6.85, 7.08], "source": "docs/pmp-fabric-dram-requests.md"},
+        {"category": "sha256, 1 thread", "series": "PMP not running", "value": 10.53, "source": "docs/pmp-fabric-dram-requests.md"},
+        {"category": "sha256, 1 thread", "series": "PMP running", "value": 9.16, "source": "docs/pmp-fabric-dram-requests.md"}
+      ]
+    },
+    {
+      "id": "tbnet-loopback",
+      "title": "Thunderbolt networking, patch by patch",
+      "subtitle": "Mac Studio M1 Max, two USB4 ports looped (20 Gb/s x2), MTU 65522, iperf3, one direction",
+      "unit": "Gb/s",
+      "series": [
+        {"name": "throughput", "role": "after"}
+      ],
+      "data": [
+        {"category": "unpatched", "series": "throughput", "value": 3.4, "source": "docs/thunderbolt-net.md"},
+        {"category": "+ dma-coherent NHIs (0022)", "series": "throughput", "value": [4.0, 4.2], "source": "docs/thunderbolt-net.md"},
+        {"category": "+ Tx E2E flow control (0020, 0021)", "series": "throughput", "value": 4.8, "source": "docs/thunderbolt-net.md"},
+        {"category": "+ ring 1024, threaded NAPI, GRO off", "series": "throughput", "value": 8.2, "source": "docs/thunderbolt-net.md"},
+        {"category": "0020-0024, threaded NAPI, GRO off", "series": "throughput", "value": 21.2, "source": "docs/thunderbolt-net.md"}
+      ]
+    },
+    {
+      "id": "tbnet-forwarding",
+      "title": "Forwarding TSO traffic over Thunderbolt (0026)",
+      "subtitle": "M1 Max to M1 Max, 20 Gb/s x2, MTU 1500, from the peer through a bridge into a veth",
+      "unit": "Gb/s",
+      "series": [
+        {"name": "forwarded", "role": "after"}
+      ],
+      "data": [
+        {"category": "before 0026 (418 retransmits)", "series": "forwarded", "value": 0.01, "source": "docs/thunderbolt-net-tso-forwarding.md"},
+        {"category": "old workaround: peer TSO off", "series": "forwarded", "value": 5.4, "source": "docs/thunderbolt-net-tso-forwarding.md"},
+        {"category": "with 0026, peer TSO on", "series": "forwarded", "value": [19.1, 19.5], "source": "docs/thunderbolt-net-tso-forwarding.md"}
+      ]
+    },
+    {
+      "id": "ave-encode",
+      "title": "AVE hardware encoder, 1080p H.264",
+      "subtitle": "One stream, frames per second (approximate, from the driver's upstream measurements)",
+      "unit": "fps",
+      "series": [
+        {"name": "without a PMP vote", "role": "before"},
+        {"name": "with the PMP vote", "role": "after"}
+      ],
+      "data": [
+        {"category": "M1 Pro (t6000)", "series": "without a PMP vote", "value": 64, "source": "packages/apple-ave/README.md"},
+        {"category": "M1 Pro (t6000)", "series": "with the PMP vote", "value": 194, "source": "packages/apple-ave/README.md"},
+        {"category": "M1 Max (t6001)", "series": "without a PMP vote", "value": 70, "source": "packages/apple-ave/README.md"},
+        {"category": "M1 Max (t6001)", "series": "with the PMP vote", "value": 170, "source": "packages/apple-ave/README.md"},
+        {"category": "M1 (t8103)", "series": "without a PMP vote", "value": 156, "source": "packages/apple-ave/README.md"},
+        {"category": "M1 (t8103)", "series": "with the PMP vote", "value": null, "note": "no PMP on this SoC", "source": "packages/apple-ave/README.md"},
+        {"category": "M2 (t8112)", "series": "without a PMP vote", "value": 158, "source": "packages/apple-ave/README.md"},
+        {"category": "M2 (t8112)", "series": "with the PMP vote", "value": null, "note": "slower with the PMP; not used", "source": "packages/apple-ave/README.md"},
+        {"category": "M1 Ultra (t6002), per encoder", "series": "without a PMP vote", "value": 57, "source": "packages/apple-ave/README.md"},
+        {"category": "M1 Ultra (t6002), per encoder", "series": "with the PMP vote", "value": null, "note": "PMP not used", "source": "packages/apple-ave/README.md"}
+      ]
+    },
+    {
+      "id": "avd-cpu",
+      "title": "AVD decoder: CPU time with cacheable buffers (0001)",
+      "subtitle": "M1 Mac mini (t8103), ffmpeg v4l2request, 150 frames 2304x1296 scaled to 640x360; user + sys CPU seconds",
+      "unit": "s",
+      "series": [
+        {"name": "CPU time", "role": "after"}
+      ],
+      "data": [
+        {"category": "hardware decode, before 0001", "series": "CPU time", "value": 3.06, "derived": "2.97 s user + 0.09 s sys", "source": "docs/apple-avd-fixes.md"},
+        {"category": "hardware decode, with 0001", "series": "CPU time", "value": [0.47, 0.54], "derived": "0.36-0.40 s user + 0.11-0.14 s sys", "source": "docs/apple-avd-fixes.md"},
+        {"category": "software decode, one thread", "series": "CPU time", "value": 0.53, "source": "docs/apple-avd-fixes.md"}
+      ]
+    }
+  ]
+}

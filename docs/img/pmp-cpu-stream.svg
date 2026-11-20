@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="290" viewBox="0 0 760 290" role="img" aria-labelledby="pmp-cpu-stream-title pmp-cpu-stream-desc" font-family="system-ui, -apple-system, &quot;Segoe UI&quot;, Helvetica, Arial, sans-serif">
+<title id="pmp-cpu-stream-title">CPU memory bandwidth with the PMP running</title>
+<desc id="pmp-cpu-stream-desc">M1 Max (t6001), STREAM, 10 threads. copy, PMP not running: 110 GB/s; copy, PMP running, no requests (memvote off): 54.5 GB/s; copy, PMP running, apple-cpu-memvote auto: 160.6 GB/s; triad, PMP not running: 133 GB/s; triad, PMP running, no requests (memvote off): 67.2 GB/s; triad, PMP running, apple-cpu-memvote auto: 165.5 GB/s</desc>
+<rect x="0.5" y="0.5" width="759" height="289" rx="8" fill="#fcfcfb" stroke="#e1e0d9"/>
+<text x="20" y="38" font-size="16" font-weight="600" fill="#0b0b0b">CPU memory bandwidth with the PMP running</text>
+<text x="20" y="60" font-size="12.5" fill="#52514e">M1 Max (t6001), STREAM, 10 threads</text>
+<rect x="20" y="76" width="12" height="12" rx="3" fill="#1baf7a"/>
+<text x="38" y="86" font-size="12" fill="#52514e">PMP not running</text>
+<rect x="158.8" y="76" width="12" height="12" rx="3" fill="#eb6834"/>
+<text x="176.8" y="86" font-size="12" fill="#52514e">PMP running, no requests (memvote off)</text>
+<rect x="452.16" y="76" width="12" height="12" rx="3" fill="#2a78d6"/>
+<text x="470.16" y="86" font-size="12" fill="#52514e">PMP running, apple-cpu-memvote auto</text>
+<line x1="69.0" y1="120" x2="69.0" y2="234" stroke="#c3c2b7" stroke-width="1"/>
+<text x="69.0" y="248" font-size="11" text-anchor="middle" fill="#6f6e69">0</text>
+<line x1="223.2" y1="120" x2="223.2" y2="234" stroke="#e1e0d9" stroke-width="1"/>
+<text x="223.2" y="248" font-size="11" text-anchor="middle" fill="#6f6e69">50</text>
+<line x1="377.5" y1="120" x2="377.5" y2="234" stroke="#e1e0d9" stroke-width="1"/>
+<text x="377.5" y="248" font-size="11" text-anchor="middle" fill="#6f6e69">100</text>
+<line x1="531.8" y1="120" x2="531.8" y2="234" stroke="#e1e0d9" stroke-width="1"/>
+<text x="531.8" y="248" font-size="11" text-anchor="middle" fill="#6f6e69">150</text>
+<line x1="686.0" y1="120" x2="686.0" y2="234" stroke="#e1e0d9" stroke-width="1"/>
+<text x="686.0" y="248" font-size="11" text-anchor="middle" fill="#6f6e69">200</text>
+<text x="686.0" y="262" font-size="11" text-anchor="end" fill="#6f6e69">GB/s</text>
+<text x="59.0" y="151.5" font-size="12.5" text-anchor="end" fill="#0b0b0b">copy</text>
+<g><title>copy, PMP not running: 110 GB/s</title>
+<path d="M69.0,124.0H404.4A4,4 0 0 1 408.4,128.0V134.0A4,4 0 0 1 404.4,138.0H69.0Z" fill="#1baf7a"/>
+<text x="413.4" y="135" font-size="11.5" fill="#52514e">110</text></g>
+<g><title>copy, PMP running, no requests (memvote off): 54.5 GB/s</title>
+<path d="M69.0,140.0H233.1A4,4 0 0 1 237.1,144.0V150.0A4,4 0 0 1 233.1,154.0H69.0Z" fill="#eb6834"/>
+<text x="242.1" y="151" font-size="11.5" fill="#52514e">54.5</text></g>
+<g><title>copy, PMP running, apple-cpu-memvote auto: 160.6 GB/s</title>
+<path d="M69.0,156.0H560.5A4,4 0 0 1 564.5,160.0V166.0A4,4 0 0 1 560.5,170.0H69.0Z" fill="#2a78d6"/>
+<text x="569.5" y="167" font-size="11.5" fill="#52514e">160.6</text></g>
+<text x="59.0" y="211.5" font-size="12.5" text-anchor="end" fill="#0b0b0b">triad</text>
+<g><title>triad, PMP not running: 133 GB/s</title>
+<path d="M69.0,184.0H475.3A4,4 0 0 1 479.3,188.0V194.0A4,4 0 0 1 475.3,198.0H69.0Z" fill="#1baf7a"/>
+<text x="484.3" y="195" font-size="11.5" fill="#52514e">133</text></g>
+<g><title>triad, PMP running, no requests (memvote off): 67.2 GB/s</title>
+<path d="M69.0,200.0H272.3A4,4 0 0 1 276.3,204.0V210.0A4,4 0 0 1 272.3,214.0H69.0Z" fill="#eb6834"/>
+<text x="281.3" y="211" font-size="11.5" fill="#52514e">67.2</text></g>
+<g><title>triad, PMP running, apple-cpu-memvote auto: 165.5 GB/s</title>
+<path d="M69.0,216.0H575.6A4,4 0 0 1 579.6,220.0V226.0A4,4 0 0 1 575.6,230.0H69.0Z" fill="#2a78d6"/>
+<text x="584.6" y="227" font-size="11.5" fill="#52514e">165.5</text></g>
+<text x="20" y="274" font-size="11" fill="#6f6e69">Source: docs/pmp-fabric-dram-requests.md</text>
+</svg>

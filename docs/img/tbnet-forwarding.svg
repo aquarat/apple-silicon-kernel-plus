@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="214" viewBox="0 0 760 214" role="img" aria-labelledby="tbnet-forwarding-title tbnet-forwarding-desc" font-family="system-ui, -apple-system, &quot;Segoe UI&quot;, Helvetica, Arial, sans-serif">
+<title id="tbnet-forwarding-title">Forwarding TSO traffic over Thunderbolt (0026)</title>
+<desc id="tbnet-forwarding-desc">M1 Max to M1 Max, 20 Gb/s x2, MTU 1500, from the peer through a bridge into a veth. before 0026 (418 retransmits), forwarded: 0.01 Gb/s; old workaround: peer TSO off, forwarded: 5.4 Gb/s; with 0026, peer TSO on, forwarded: 19.1-19.5 Gb/s</desc>
+<rect x="0.5" y="0.5" width="759" height="213" rx="8" fill="#fcfcfb" stroke="#e1e0d9"/>
+<text x="20" y="38" font-size="16" font-weight="600" fill="#0b0b0b">Forwarding TSO traffic over Thunderbolt (0026)</text>
+<text x="20" y="60" font-size="12.5" fill="#52514e">M1 Max to M1 Max, 20 Gb/s x2, MTU 1500, from the peer through a bridge into a veth</text>
+<line x1="237.0" y1="80" x2="237.0" y2="158" stroke="#c3c2b7" stroke-width="1"/>
+<text x="237.0" y="172" font-size="11" text-anchor="middle" fill="#6f6e69">0</text>
+<line x1="326.8" y1="80" x2="326.8" y2="158" stroke="#e1e0d9" stroke-width="1"/>
+<text x="326.8" y="172" font-size="11" text-anchor="middle" fill="#6f6e69">5</text>
+<line x1="416.6" y1="80" x2="416.6" y2="158" stroke="#e1e0d9" stroke-width="1"/>
+<text x="416.6" y="172" font-size="11" text-anchor="middle" fill="#6f6e69">10</text>
+<line x1="506.4" y1="80" x2="506.4" y2="158" stroke="#e1e0d9" stroke-width="1"/>
+<text x="506.4" y="172" font-size="11" text-anchor="middle" fill="#6f6e69">15</text>
+<line x1="596.2" y1="80" x2="596.2" y2="158" stroke="#e1e0d9" stroke-width="1"/>
+<text x="596.2" y="172" font-size="11" text-anchor="middle" fill="#6f6e69">20</text>
+<line x1="686.0" y1="80" x2="686.0" y2="158" stroke="#e1e0d9" stroke-width="1"/>
+<text x="686.0" y="172" font-size="11" text-anchor="middle" fill="#6f6e69">25</text>
+<text x="686.0" y="186" font-size="11" text-anchor="end" fill="#6f6e69">Gb/s</text>
+<text x="227.00000000000003" y="95.5" font-size="12.5" text-anchor="end" fill="#0b0b0b">before 0026 (418 retransmits)</text>
+<g><title>before 0026 (418 retransmits), forwarded: 0.01 Gb/s</title>
+<path d="M237.0,84.0H237.8A0.75,0.75 0 0 1 238.5,84.8V97.2A0.75,0.75 0 0 1 237.8,98.0H237.0Z" fill="#2a78d6"/>
+<text x="243.5" y="95" font-size="11.5" fill="#52514e">0.01</text></g>
+<text x="227.00000000000003" y="123.5" font-size="12.5" text-anchor="end" fill="#0b0b0b">old workaround: peer TSO off</text>
+<g><title>old workaround: peer TSO off, forwarded: 5.4 Gb/s</title>
+<path d="M237.0,112.0H330.0A4,4 0 0 1 334.0,116.0V122.0A4,4 0 0 1 330.0,126.0H237.0Z" fill="#2a78d6"/>
+<text x="339.0" y="123" font-size="11.5" fill="#52514e">5.4</text></g>
+<text x="227.00000000000003" y="151.5" font-size="12.5" text-anchor="end" fill="#0b0b0b">with 0026, peer TSO on</text>
+<g><title>with 0026, peer TSO on, forwarded: 19.1-19.5 Gb/s</title>
+<path d="M237.0,140.0H576.0A4,4 0 0 1 580.0,144.0V150.0A4,4 0 0 1 576.0,154.0H237.0Z" fill="#2a78d6"/>
+<line x1="580.0" y1="147.0" x2="587.2" y2="147.0" stroke="#2a78d6" stroke-width="2"/>
+<line x1="587.2" y1="142" x2="587.2" y2="152" stroke="#2a78d6" stroke-width="2" stroke-linecap="round"/>
+<text x="592.2" y="151" font-size="11.5" fill="#52514e">19.1-19.5</text></g>
+<text x="20" y="198" font-size="11" fill="#6f6e69">Source: docs/thunderbolt-net-tso-forwarding.md</text>
+</svg>

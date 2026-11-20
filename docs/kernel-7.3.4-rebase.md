@@ -104,3 +104,34 @@ had bound. CPU requests were off (`apple_cpu_memvote.mode=off`):
   runs gives GPU 166/222/266/152 and STREAM 152/145. 10-thread STREAM
   alone gives 155/161.
 - **Kernel log:** no warnings, faults or GPU errors.
+
+## Tests (M1 Pro laptop, t6000; PMP running)
+
+A 14" M1 Pro MacBook Pro that runs a network video recorder (five
+cameras, hardware decoding through dkms-apple-avd) with the PMP on: m1n1's
+stage 2 has a device tree built with `APPLE_USE_PMP` from an earlier
+kernel, and the GPU's `report@9` entry (0037) was added to the running
+device tree at boot. The recorder kept running during the measurements.
+7.3.1 `plus3` (no PMP requests, no GPU report) against 7.3.4 `plus5`
+(`apple-cpu-memvote` in `auto`, the GPU report), the same day:
+
+| | 7.3.1 `plus3` | 7.3.4 `plus5` |
+|---|---|---|
+| GPU mat-vec f32/f16/bf16/q4_0 GB/s | 42.6 / 41.9 / 41.7 / 38.5 | 81.8 / 96.2 / 125.2 / 82.7 |
+| CPU STREAM 8 threads, copy/triad GB/s (two runs) | 35.8/30.8, 33.7/34.0 | 141.2/131.9, 144.2/127.9 |
+| CPU STREAM 1 thread, copy/triad GB/s | 29.3/24.7 | 83.2/76.7 |
+| apple-ave, 60 frames 1080p H.264, ms per frame | 5.10 | 5.04 (vote through the provider) |
+
+- With the PMP running and nothing requesting bandwidth, the M1 Pro's GPU
+  was held at about 42 GB/s for every data type, about a fifth of the
+  SoC's 200 GB/s. The CPU and GPU gains were not separated on this machine
+  (the report cannot be undone while running).
+- Decoder output was bit-exact against software decoding (H.264, HEVC and
+  a camera clip); the recorder ran 15 minutes at 5.04 fps per camera with
+  no skipped frames; no WARNING, GPU or IOMMU faults in the kernel log.
+- The same day the machine's stage 2 was rebuilt with the 7.3.4 device
+  tree (with the PMP fixup and 0037's `report@9`), so the report comes
+  from the device tree instead: GPU 81.6 / 96.3 / 125.0 / 79.5 GB/s,
+  STREAM 8 threads 137-138 / 130-132, the same as above. Two ISP IOMMU
+  translation faults at webcam probe appeared on that boot (the ISP still
+  binds; seen before on PMP-on boots of an M1 Max).
